@@ -49,6 +49,18 @@ public class SortedSet
     private readonly AvlTree _tree = new AvlTree();
 
     /// <summary>
+    /// Gets the number of members in the sorted set.
+    /// This property provides O(1) access to the cardinality of the set.
+    /// </summary>
+    /// <remarks>
+    /// Used for:
+    /// - Determining deletion strategy (sync vs async based on threshold)
+    /// - ZCARD command implementation (returns sorted set cardinality)
+    /// - Performance optimization decisions
+    /// </remarks>
+    public int Count => _dict.Count;
+
+    /// <summary>
     /// Adds a new member with the specified score to the sorted set.
     /// This method implements the core functionality of the Redis ZADD command.
     /// </summary>
