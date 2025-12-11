@@ -326,12 +326,10 @@ public class Connection
             // Nothing to send (initial call with empty buffer, or all sent in previous calls)
             if (WriteBuffer.Count == 0)
             {
-                Console.WriteLine("[Flush] WriteBuffer is empty, nothing to send");
                 return true;
             }
 
             // All data sent, clear buffer and reset offset
-            Console.WriteLine($"[Flush] All {WriteBuffer.Count} bytes sent, clearing buffer");
             WriteBuffer.Clear();
             WriteBufferOffset = 0;
             return true;
@@ -346,13 +344,9 @@ public class Connection
             // Create a slice starting from where we left off (for partial sends)
             Span<byte> remaining = bufferSpan.Slice(WriteBufferOffset);
 
-            Console.WriteLine($"[Flush] Attempting to send {remaining.Length} bytes (offset: {WriteBufferOffset}/{WriteBuffer.Count})");
-
             // Send as much as the kernel buffer allows (non-blocking)
             // May send less than requested if kernel send buffer is full
             int sent = Socket.Send(remaining, SocketFlags.None);
-
-            Console.WriteLine($"[Flush] Sent {sent} bytes (total progress: {WriteBufferOffset + sent}/{WriteBuffer.Count})");
 
             if (sent == 0)
             {
@@ -366,14 +360,12 @@ public class Connection
             // Check if we've sent everything
             if (WriteBufferOffset >= WriteBuffer.Count)
             {
-                Console.WriteLine($"[Flush] Successfully sent all {WriteBuffer.Count} bytes");
                 WriteBuffer.Clear();
                 WriteBufferOffset = 0;
                 return true; // Done - all data sent
             }
 
             // Partial send - need to wait for write-ready
-            Console.WriteLine($"[Flush] Partial send: {WriteBufferOffset}/{WriteBuffer.Count} bytes sent, needs write monitoring");
             return false; // Not done - still have data to send
         }
         catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock)

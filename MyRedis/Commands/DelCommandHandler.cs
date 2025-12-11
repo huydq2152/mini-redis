@@ -23,7 +23,7 @@ public class DelCommandHandler : BaseCommandHandler
     /// - Below threshold: Overhead > Benefit, so use sync
     /// - Above threshold: Benefit > Overhead, so use async
     /// </summary>
-    private const int LAZYFREE_THRESHOLD = 64;
+    private const int LazyFreeThreshold = 64;
 
     /// <summary>
     /// Background worker for handling asynchronous deletion of large objects.
@@ -76,15 +76,13 @@ public class DelCommandHandler : BaseCommandHandler
             {
                 // Large objects (>= 64 elements): Use asynchronous deletion to avoid blocking
                 // This implements Redis UNLINK-like behavior for better performance
-                int size = GetObjectSize(value);
-                Console.WriteLine($"[Async] Unlinking large key: {key} (size: {size} elements, threshold: {LAZYFREE_THRESHOLD})");
-                _backgroundWorker.Submit(() => DestroyObject(value, key));
+                _backgroundWorker.Submit(() => DestroyObject(value));
             }
             else
             {
                 // Small objects (< 64 elements): Delete immediately on the main thread
                 // Async overhead would be greater than deletion cost
-                DestroyObject(value, key);
+                DestroyObject(value);
             }
 
             // Return 1 to indicate one key was successfully deleted
@@ -115,7 +113,7 @@ public class DelCommandHandler : BaseCommandHandler
         {
             // Only consider it "large" if it exceeds the threshold
             // This prevents unnecessary async overhead for small sorted sets
-            return sortedSet.Count >= LAZYFREE_THRESHOLD;
+            return sortedSet.Count >= LazyFreeThreshold;
         }
 
         // Simple objects like strings are always considered lightweight
@@ -124,47 +122,25 @@ public class DelCommandHandler : BaseCommandHandler
     }
 
     /// <summary>
-    /// Gets the size (element count) of an object for logging and metrics.
-    /// </summary>
-    /// <param name="val">The object to measure</param>
-    /// <returns>Number of elements in the object, or 1 for simple types</returns>
-    private static int GetObjectSize(object val)
-    {
-        if (val is Storage.DataStructures.SortedSet sortedSet)
-        {
-            return sortedSet.Count;
-        }
-
-        // Simple types like strings are considered size 1
-        return 1;
-    }
-
-    /// <summary>
     /// Performs the actual cleanup/destruction of an object.
-    /// For complex data structures, this method helps the garbage collector by
-    /// breaking circular references and reducing GC pressure on higher generations.
+    ///
+    /// Design Principle: "Tell, Don't Ask"
+    /// This method tells objects to destroy themselves rather than asking about their internal structure.
+    /// Each object knows how to properly clean itself up, maintaining encapsulation.
+    ///
+    /// For complex data structures like SortedSet, destruction involves breaking internal references
+    /// to help the garbage collector and reduce GC pause times. See SortedSet.Destroy() for details.
     /// </summary>
     /// <param name="val">The object to destroy</param>
-    /// <param name="key">The key name for logging purposes</param>
-    private static void DestroyObject(object val, string key)
+    private static void DestroyObject(object val)
     {
-        // While C#'s garbage collector handles memory cleanup automatically,
-        // we can assist with complex structures like AVL trees to prevent
-        // stack overflow during recursive GC and reduce Gen 2 pressure
-
+        // Tell the object to destroy itself - the object knows its own internal structure
+        // and how to properly clean up. We don't need to know the details.
         if (val is Storage.DataStructures.SortedSet sortedSet)
         {
-            int size = sortedSet.Count;
-
-            // Simulate expensive cleanup operation for demonstration
-            // In a real implementation, this would traverse the AVL tree
-            // and explicitly null out node references to help the GC
-            Thread.Sleep(500); // Demo: Simulate 500ms cleanup time
-
-            Console.WriteLine($"[BgWorker] Large object destroyed: {key} (size: {size} elements)");
+            // Delegate to the object's own Destroy method
+            // This maintains encapsulation and follows OOP principles
+            sortedSet.Destroy();
         }
-
-        // For simple objects like strings, no special cleanup is needed
-        // The GC will handle them efficiently
     }
 }

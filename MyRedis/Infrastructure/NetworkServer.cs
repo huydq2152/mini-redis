@@ -276,12 +276,6 @@ public class NetworkServer
                 {
                     // All data sent, stop monitoring for writes
                     _pendingWrites.Remove(socket);
-                    Console.WriteLine($"[Write Complete] {socket.RemoteEndPoint} - removed from pending writes");
-                }
-                else
-                {
-                    // Still have data to send, keep monitoring
-                    Console.WriteLine($"[Write Partial] {socket.RemoteEndPoint} - still pending");
                 }
             }
         }

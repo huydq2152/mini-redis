@@ -202,9 +202,6 @@ public class BackgroundTaskManager
         {
             // Remove the key-value data (frees memory)
             _dataStore.Remove(key);
-
-            // Log for visibility (helps with debugging and monitoring)
-            Console.WriteLine($"[TTL] Expired key: {key}");
         }
     }
 
