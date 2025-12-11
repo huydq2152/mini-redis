@@ -89,6 +89,18 @@ public class NetworkServer
     // Tracks connection activity for idle detection
     private readonly IConnectionManager _connectionManager;
 
+    // HashSet of sockets with pending writes (partial sends)
+    // Performance: O(1) add/remove, O(K) iteration where K = pending writes count
+    // Why HashSet instead of List.Contains or flag iteration:
+    // - List.Remove(socket) = O(N) where N = total connections (bad for C10K)
+    // - Iterating all connections to check flag = O(N) every event loop (bad for C10K)
+    // - HashSet operations = O(1), iteration = O(K) where K << N typically (optimal)
+    //
+    // Example: 10,000 connections, 50 have pending writes (slow clients)
+    // - HashSet: Build writeList = O(50), remove = O(1) = Fast
+    // - Flag iteration: Check 10,000 flags every loop = Slow
+    private readonly HashSet<Socket> _pendingWrites = new();
+
     /// <summary>
     /// Creates and configures the network server.
     ///
@@ -155,6 +167,7 @@ public class NetworkServer
     /// Select Operation:
     /// Socket.Select(readList, writeList, errorList, timeout) waits until:
     /// - A socket in readList becomes readable (data available or new connection)
+    /// - A socket in writeList becomes writable (can send data without blocking)
     /// - A socket in errorList has an error
     /// - Timeout expires
     ///
@@ -164,7 +177,18 @@ public class NetworkServer
     /// Event Handling:
     /// - Listener socket readable -> New connection pending -> HandleAccept()
     /// - Client socket readable -> Data available -> HandleRead()
+    /// - Client socket writable -> Can resume partial send -> HandleWrite()
     /// - Any errors -> HandleDisconnect() cleans up
+    ///
+    /// Write Monitoring (New):
+    /// Sockets are added to writeList when they have pending writes (partial sends).
+    /// This prevents blocking the main thread when kernel send buffer is full.
+    ///
+    /// Performance - C10K Scenario:
+    /// - Total connections: 10,000
+    /// - Pending writes: ~50 (slow clients)
+    /// - Build writeList: O(50) from HashSet, not O(10,000) from flag iteration
+    /// - Result: Event loop stays responsive even with many idle connections
     ///
     /// Return Value:
     /// Returns list of connections that received data. The orchestrator will:
@@ -190,10 +214,11 @@ public class NetworkServer
     /// Example Flow:
     /// 1. Select waits with 500ms timeout
     /// 2. Client1 sends data -> Select returns immediately
-    /// 3. readList = [client1], errorList = []
+    /// 3. readList = [client1], writeList = [client2 (has pending)], errorList = []
     /// 4. HandleRead(client1) reads data into buffer
-    /// 5. Return [(connection1, bytesRead)]
-    /// 6. Orchestrator processes commands from connection1
+    /// 5. HandleWrite(client2) resumes partial send
+    /// 6. Return [(connection1, bytesRead)]
+    /// 7. Orchestrator processes commands from connection1
     /// </summary>
     /// <param name="timeoutMicroseconds">How long to wait for events (0 = non-blocking, -1 = infinite)</param>
     /// <returns>List of (connection, bytesRead) tuples for connections that received data</returns>
@@ -204,11 +229,16 @@ public class NetworkServer
         var readList = new List<Socket>(_allSockets);
         var errorList = new List<Socket>(_allSockets);
 
+        // Build write list from pending writes HashSet
+        // Performance: O(K) where K = number of pending writes (typically K << N)
+        // Alternative (bad): Iterate all N connections checking flag = O(N) every loop
+        var writeList = new List<Socket>(_pendingWrites);
+
         // Wait for socket events (blocks until event or timeout)
         // readList: Will contain sockets with data available or new connections
-        // writeList: Not used (we don't wait for write readiness)
+        // writeList: Will contain sockets ready to send more data (kernel buffer available)
         // errorList: Will contain sockets with errors
-        Socket.Select(readList, null, errorList, timeoutMicroseconds);
+        Socket.Select(readList, writeList, errorList, timeoutMicroseconds);
 
         // List of connections that received data (return value)
         var results = new List<(Connection, int)>();
@@ -230,6 +260,28 @@ public class NetworkServer
                 if (bytesRead > 0 && _connections.TryGetValue(socket, out var connection))
                 {
                     results.Add((connection, bytesRead));
+                }
+            }
+        }
+
+        // Process all sockets that became writable (can resume partial sends)
+        foreach (var socket in writeList)
+        {
+            if (_connections.TryGetValue(socket, out var connection))
+            {
+                // Try to send remaining data
+                bool allSent = connection.Flush();
+
+                if (allSent)
+                {
+                    // All data sent, stop monitoring for writes
+                    _pendingWrites.Remove(socket);
+                    Console.WriteLine($"[Write Complete] {socket.RemoteEndPoint} - removed from pending writes");
+                }
+                else
+                {
+                    // Still have data to send, keep monitoring
+                    Console.WriteLine($"[Write Partial] {socket.RemoteEndPoint} - still pending");
                 }
             }
         }
@@ -411,11 +463,13 @@ public class NetworkServer
     /// 2. Close the socket (TCP FIN sent to client)
     /// 3. Remove from _connections dictionary
     /// 4. Remove from _allSockets list (Select no longer monitors it)
+    /// 5. Remove from _pendingWrites (stop write monitoring)
     ///
     /// Why This Order?
     /// - ConnectionManager first: It may access the Connection object
     /// - Close socket: Release OS resources (file descriptor)
     /// - Remove from dictionaries: Release managed memory
+    /// - Remove from tracking sets: Prevent stale references
     ///
     /// Resource Cleanup:
     /// This prevents resource leaks by ensuring:
@@ -455,6 +509,44 @@ public class NetworkServer
 
         // Remove from socket list (Select will no longer monitor it)
         _allSockets.Remove(socket);
+
+        // Remove from pending writes (if it was waiting for write-ready)
+        // HashSet.Remove() is O(1) and idempotent (safe even if not present)
+        _pendingWrites.Remove(socket);
+    }
+
+    /// <summary>
+    /// Registers a socket for write monitoring (POLLOUT).
+    ///
+    /// Called after command processing when Flush() indicates partial send:
+    /// - Flush() returns false -> data still in WriteBuffer -> needs write monitoring
+    /// - Socket added to _pendingWrites HashSet
+    /// - Next ProcessNetworkEvents() includes this socket in writeList
+    /// - Select() waits for kernel send buffer to have space
+    /// - When ready, Flush() is called again to resume sending
+    ///
+    /// Performance:
+    /// - HashSet.Add() is O(1)
+    /// - Idempotent: Adding same socket multiple times is safe
+    ///
+    /// Use Case:
+    /// - Large responses (1MB+ from MGET, ZRANGE, etc.)
+    /// - Slow clients (network congestion, limited bandwidth)
+    /// - High throughput scenarios (kernel buffer saturation)
+    ///
+    /// Why Not Called from Flush() Directly?
+    /// - Flush() is in Connection class (domain model)
+    /// - _pendingWrites is in NetworkServer (infrastructure)
+    /// - Separation of concerns: Connection shouldn't know about NetworkServer
+    /// - Orchestrator coordinates between the two
+    /// </summary>
+    /// <param name="socket">The socket that has pending writes</param>
+    public void RegisterPendingWrite(Socket socket)
+    {
+        if (_pendingWrites.Add(socket))
+        {
+            Console.WriteLine($"[Pending Write] {socket.RemoteEndPoint} registered for write monitoring");
+        }
     }
 
     /// <summary>

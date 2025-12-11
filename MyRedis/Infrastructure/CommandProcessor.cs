@@ -166,7 +166,10 @@ public class CommandProcessor
 
                 // Send response immediately to the client
                 // This ensures low latency (don't buffer responses)
-                connection.Flush();
+                // Flush() returns:
+                // - true: All data sent (normal case for small responses)
+                // - false: Partial send, needs write monitoring (large responses or slow clients)
+                bool allSent = connection.Flush();
 
                 // Remove processed bytes from the buffer
                 // This compacts the buffer so remaining data moves to the front

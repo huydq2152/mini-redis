@@ -1,4 +1,5 @@
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 
 namespace MyRedis.Core;
 
@@ -251,53 +252,148 @@ public class Connection
     public List<byte> WriteBuffer { get; } = new List<byte>();
 
     /// <summary>
-    /// Sends all buffered response data to the client and clears the buffer.
+    /// Tracks how many bytes have been successfully sent from WriteBuffer.
     ///
-    /// Called after each command execution to send the response immediately.
-    /// This implements "eager flushing" - responses go out as soon as ready.
+    /// Used for handling partial sends on non-blocking sockets:
+    /// - Initial value: 0 (nothing sent yet)
+    /// - After partial send: Set to number of bytes sent
+    /// - On complete send: Reset to 0
     ///
-    /// Protocol Behavior:
-    /// - Redis protocol expects immediate responses for each command
-    /// - Buffering responses across commands would break the protocol
-    /// - Exception: Pipelined commands still respond in order, just immediately
+    /// Example:
+    /// - WriteBuffer has 1000 bytes
+    /// - First Send() sends 700 bytes -> WriteBufferOffset = 700
+    /// - Next Send() sends remaining 300 -> WriteBufferOffset = 1000
+    /// - Clear buffer -> WriteBufferOffset = 0
     ///
-    /// Blocking vs Non-Blocking:
-    /// - Socket is non-blocking, but we assume Send() completes
-    /// - For small responses (<64KB), this is typically true
-    /// - For very large responses, Socket.Send() may return partial send
-    /// - Current implementation doesn't handle partial sends (simplified)
+    /// Performance:
+    /// - Avoids reallocating buffer for partial sends
+    /// - Enables resumable sends without data loss
+    /// - Used by NetworkServer's write monitoring (POLLOUT)
+    /// </summary>
+    public int WriteBufferOffset { get; set; } = 0;
+
+    /// <summary>
+    /// Sends buffered response data to the client (supports partial sends).
+    ///
+    /// Non-Blocking Write Architecture:
+    /// This method is designed for event-driven, non-blocking I/O:
+    /// - Returns true if all data sent (buffer can be cleared)
+    /// - Returns false if partial send (needs write monitoring via Socket.Select)
+    /// - Never blocks the main thread waiting for slow clients
+    ///
+    /// Performance Optimization - CollectionsMarshal:
+    /// Uses CollectionsMarshal.AsSpan() for zero-copy access to List<byte> internal buffer.
+    /// This avoids the expensive WriteBuffer.ToArray() allocation (critical for high throughput).
+    ///
+    /// Why This Matters (C10K Scenario):
+    /// - Without CollectionsMarshal: 10,000 requests/sec = 10,000 array allocations = GC pressure
+    /// - With CollectionsMarshal: Zero allocations = no GC pauses
+    ///
+    /// Partial Send Handling:
+    /// When kernel send buffer is full (slow client or network congestion):
+    /// 1. Send() returns bytes sent (may be less than requested)
+    /// 2. Update WriteBufferOffset to track progress
+    /// 3. Return false to signal NetworkServer: "Add me to write monitoring"
+    /// 4. NetworkServer uses Socket.Select() to wait for POLLOUT (write-ready)
+    /// 5. When ready, calls Flush() again to resume sending
+    ///
+    /// Example Flow:
+    /// Command: MGET key1 key2 ... key1000 (response = 1MB)
+    /// - First Flush(): Send 64KB (kernel buffer limit), offset = 64KB, return false
+    /// - NetworkServer adds socket to pendingWrites HashSet
+    /// - Event loop: Socket.Select() monitors write-ready
+    /// - Kernel buffer drains -> Select() signals write-ready
+    /// - Second Flush(): Send next 64KB, offset = 128KB, return false
+    /// - ... (repeat)
+    /// - Final Flush(): Send last chunk, offset = 1MB, clear buffer, return true
     ///
     /// Error Handling:
-    /// - If Send() fails, we close the connection
-    /// - This handles network errors, disconnected clients, etc.
-    /// - Closed connections are cleaned up by the event loop
+    /// - SocketException: Client disconnected or network error
+    /// - Don't call Close() here - NetworkServer handles cleanup
+    /// - Clear buffer to prevent stale data on reconnect
     ///
-    /// Future Enhancement:
-    /// - Track send progress for large responses
-    /// - Use Socket.Send() return value to handle partial sends
-    /// - Add write buffer to Select() for flow control
+    /// Protocol Behavior:
+    /// - Redis protocol expects immediate responses
+    /// - Partial sends maintain order (TCP guarantees in-order delivery)
+    /// - Client sees seamless response (doesn't know about partial sends)
     /// </summary>
-    public void Flush()
+    /// <returns>True if all data sent (done), false if needs more writes (partial send)</returns>
+    public bool Flush()
     {
-        // Nothing to send
-        if (WriteBuffer.Count == 0) return;
+        // Check if already sent everything
+        if (WriteBufferOffset >= WriteBuffer.Count)
+        {
+            // Nothing to send (initial call with empty buffer, or all sent in previous calls)
+            if (WriteBuffer.Count == 0)
+            {
+                Console.WriteLine("[Flush] WriteBuffer is empty, nothing to send");
+                return true;
+            }
+
+            // All data sent, clear buffer and reset offset
+            Console.WriteLine($"[Flush] All {WriteBuffer.Count} bytes sent, clearing buffer");
+            WriteBuffer.Clear();
+            WriteBufferOffset = 0;
+            return true;
+        }
 
         try
         {
-            // Send all buffered data to the client
-            // Note: This may not send everything for very large buffers
-            // but our responses are typically small (<4KB)
-            Socket.Send(WriteBuffer.ToArray());
+            // Zero-copy access to List<byte> internal buffer using CollectionsMarshal
+            // This avoids the expensive ToArray() allocation (critical for performance)
+            Span<byte> bufferSpan = CollectionsMarshal.AsSpan(WriteBuffer);
 
-            // Clear the buffer for the next response
-            // Note: This doesn't shrink capacity, which is intentional
-            WriteBuffer.Clear();
+            // Create a slice starting from where we left off (for partial sends)
+            Span<byte> remaining = bufferSpan.Slice(WriteBufferOffset);
+
+            Console.WriteLine($"[Flush] Attempting to send {remaining.Length} bytes (offset: {WriteBufferOffset}/{WriteBuffer.Count})");
+
+            // Send as much as the kernel buffer allows (non-blocking)
+            // May send less than requested if kernel send buffer is full
+            int sent = Socket.Send(remaining, SocketFlags.None);
+
+            Console.WriteLine($"[Flush] Sent {sent} bytes (total progress: {WriteBufferOffset + sent}/{WriteBuffer.Count})");
+
+            if (sent == 0)
+            {
+                // Socket closed or unavailable (shouldn't happen on non-blocking socket)
+                throw new SocketException((int)SocketError.ConnectionReset);
+            }
+
+            // Update progress
+            WriteBufferOffset += sent;
+
+            // Check if we've sent everything
+            if (WriteBufferOffset >= WriteBuffer.Count)
+            {
+                Console.WriteLine($"[Flush] Successfully sent all {WriteBuffer.Count} bytes");
+                WriteBuffer.Clear();
+                WriteBufferOffset = 0;
+                return true; // Done - all data sent
+            }
+
+            // Partial send - need to wait for write-ready
+            Console.WriteLine($"[Flush] Partial send: {WriteBufferOffset}/{WriteBuffer.Count} bytes sent, needs write monitoring");
+            return false; // Not done - still have data to send
         }
-        catch
+        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.WouldBlock)
+        {
+            // Non-blocking socket: kernel send buffer is full, need to wait
+            Console.WriteLine("[Flush] WouldBlock - kernel buffer full, needs write monitoring");
+            return false; // Not done - retry when socket is write-ready
+        }
+        catch (Exception ex)
         {
             // Send failed (network error, client disconnected, etc.)
-            // Close the connection - it will be cleaned up by the event loop
-            Close();
+            // Log the error but DON'T call Close() here
+            // The NetworkServer will detect the broken connection on the next read
+            // and properly clean up via HandleDisconnect()
+            Console.WriteLine($"[Flush Error] {ex.GetType().Name}: {ex.Message}");
+
+            // Clear the buffer to avoid sending stale data if connection recovers
+            WriteBuffer.Clear();
+            WriteBufferOffset = 0;
+            return true; // Treat as "done" to prevent retry on broken connection
         }
     }
 }

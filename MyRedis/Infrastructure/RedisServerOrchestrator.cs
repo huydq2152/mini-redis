@@ -213,6 +213,20 @@ public class RedisServerOrchestrator
                 // Process all commands in this connection's buffer
                 // Returns number of commands processed (for logging/metrics)
                 await _commandProcessor.ProcessConnectionDataAsync(connection);
+
+                // Check if this connection has pending writes (partial send occurred)
+                // This happens when:
+                // - Response is large (1MB+ from MGET, ZRANGE, etc.)
+                // - Client is slow (network congestion, limited bandwidth)
+                // - Kernel send buffer is full (high throughput scenario)
+                //
+                // Performance: Direct field check is O(1)
+                if (connection.WriteBufferOffset > 0 && connection.WriteBufferOffset < connection.WriteBuffer.Count)
+                {
+                    // Register for write monitoring in next event loop iteration
+                    // NetworkServer will include this socket in writeList for Select()
+                    _networkServer.RegisterPendingWrite(connection.Socket);
+                }
             }
 
             // STEP 4: Run background maintenance tasks
