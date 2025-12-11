@@ -47,13 +47,13 @@ public class ExpireCommandHandler : BaseCommandHandler
             context.ExpirationService.SetExpiration(key, seconds * 1000);
             
             // Return 1 to indicate the timeout was successfully set
-            context.ResponseWriter.WriteInt(context.Connection.WriteBuffer, 1);
+            context.ResponseWriter.WriteInt(context.Connection.Writer, 1);
         }
         else
         {
             // Key doesn't exist - cannot set expiration on non-existent key
             // Return 0 to indicate no expiration was set
-            context.ResponseWriter.WriteInt(context.Connection.WriteBuffer, 0);
+            context.ResponseWriter.WriteInt(context.Connection.Writer, 0);
         }
 
         return Task.FromResult(true);

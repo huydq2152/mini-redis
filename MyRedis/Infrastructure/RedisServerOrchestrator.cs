@@ -221,7 +221,7 @@ public class RedisServerOrchestrator
                 // - Kernel send buffer is full (high throughput scenario)
                 //
                 // Performance: Direct field check is O(1)
-                if (connection.WriteBufferOffset > 0 && connection.WriteBufferOffset < connection.WriteBuffer.Count)
+                if (connection.WriteBufferOffset > 0 && connection.WriteBufferOffset < connection.WrittenCount)
                 {
                     // Register for write monitoring in next event loop iteration
                     // NetworkServer will include this socket in writeList for Select()

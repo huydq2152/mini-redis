@@ -53,12 +53,12 @@ public class ZRangeCommandHandler : BaseCommandHandler
 
                 // Send the response as a Redis array containing the member names
                 // First write the array header with the number of items
-                context.ResponseWriter.WriteArrayHeader(context.Connection.WriteBuffer, items.Count);
+                context.ResponseWriter.WriteArrayHeader(context.Connection.Writer, items.Count);
                 
                 // Then write each member as a string element in the array
                 foreach (var item in items)
                 {
-                    context.ResponseWriter.WriteString(context.Connection.WriteBuffer, item);
+                    context.ResponseWriter.WriteString(context.Connection.Writer, item);
                 }
             }
             else
@@ -70,7 +70,7 @@ public class ZRangeCommandHandler : BaseCommandHandler
         else
         {
             // Key doesn't exist - return an empty array as per Redis specification
-            context.ResponseWriter.WriteArrayHeader(context.Connection.WriteBuffer, 0);
+            context.ResponseWriter.WriteArrayHeader(context.Connection.Writer, 0);
         }
 
         return Task.FromResult(true);

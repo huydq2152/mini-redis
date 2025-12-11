@@ -26,7 +26,7 @@ public class PingCommandHandler : BaseCommandHandler
     {
         // Respond with the standard "PONG" message to confirm server connectivity
         // This is the expected response for the PING command in Redis protocol
-        context.ResponseWriter.WriteString(context.Connection.WriteBuffer, "PONG");
+        context.ResponseWriter.WriteString(context.Connection.Writer, "PONG");
         return Task.FromResult(true);
     }
 }

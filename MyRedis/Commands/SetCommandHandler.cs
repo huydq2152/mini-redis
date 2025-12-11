@@ -39,7 +39,7 @@ public class SetCommandHandler : BaseCommandHandler
         
         // Redis SET command typically returns "OK" but this implementation uses nil
         // Both are valid Redis responses for successful SET operations
-        context.ResponseWriter.WriteNil(context.Connection.WriteBuffer);
+        context.ResponseWriter.WriteNil(context.Connection.Writer);
 
         return Task.FromResult(true);
     }

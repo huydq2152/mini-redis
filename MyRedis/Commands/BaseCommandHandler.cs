@@ -33,7 +33,7 @@ public abstract class BaseCommandHandler : ICommandHandler
     /// <param name="message">The error message to send to the client</param>
     protected void WriteError(ICommandContext context, string message)
     {
-        context.ResponseWriter.WriteError(context.Connection.WriteBuffer, 1, message);
+        context.ResponseWriter.WriteError(context.Connection.Writer, 1, message);
     }
 
     /// <summary>

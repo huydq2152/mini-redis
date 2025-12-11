@@ -86,12 +86,12 @@ public class DelCommandHandler : BaseCommandHandler
             }
 
             // Return 1 to indicate one key was successfully deleted
-            context.ResponseWriter.WriteInt(context.Connection.WriteBuffer, 1);
+            context.ResponseWriter.WriteInt(context.Connection.Writer, 1);
         }
         else
         {
             // Key doesn't exist, return 0 to indicate no keys were deleted
-            context.ResponseWriter.WriteInt(context.Connection.WriteBuffer, 0);
+            context.ResponseWriter.WriteInt(context.Connection.Writer, 0);
         }
 
         return Task.FromResult(true);

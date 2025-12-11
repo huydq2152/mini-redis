@@ -40,7 +40,7 @@ namespace MyRedis.Infrastructure;
 /// 2. Look up handler in CommandRegistry
 /// 3. Build ICommandContext with connection, data store, expiration service
 /// 4. Call handler.HandleAsync(context, arguments)
-/// 5. Handler writes response to connection.WriteBuffer
+/// 5. Handler writes response to connection.Writer
 /// 6. Flush response immediately (send to client)
 /// 7. Remove parsed bytes from buffer and repeat
 ///
@@ -202,7 +202,7 @@ public class CommandProcessor
     ///    a. Build command context (connection, data store, etc.)
     ///    b. Extract arguments (everything after command name)
     ///    c. Call handler.HandleAsync(context, args)
-    ///    d. Handler writes response to connection.WriteBuffer
+    ///    d. Handler writes response to connection.Writer
     /// 4. If handler not found:
     ///    a. Write error response to client
     ///
@@ -258,14 +258,14 @@ public class CommandProcessor
             var args = cmd.Skip(1).ToList();
 
             // Call the handler to execute the command
-            // Handler will write response to connection.WriteBuffer
+            // Handler will write response to connection.Writer
             await handler.HandleAsync(context, args);
         }
         else
         {
             // Unknown command, return error to client
             // Format: "-Unknown cmd\r\n" (Redis error response format)
-            _responseWriter.WriteError(connection.WriteBuffer, 1, "Unknown cmd");
+            _responseWriter.WriteError(connection.Writer, 1, "Unknown cmd");
         }
     }
 }

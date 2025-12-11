@@ -60,7 +60,7 @@ public class ZAddCommandHandler : BaseCommandHandler
             bool added = zset.Add(member, score);
             
             // Return 1 if a new element was added, 0 if an existing element was updated
-            context.ResponseWriter.WriteInt(context.Connection.WriteBuffer, added ? 1 : 0);
+            context.ResponseWriter.WriteInt(context.Connection.Writer, added ? 1 : 0);
         }
         else
         {

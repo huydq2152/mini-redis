@@ -39,7 +39,7 @@ public class TtlCommandHandler : BaseCommandHandler
         if (!context.DataStore.Exists(key))
         {
             // Key does not exist - return -2 as per Redis specification
-            context.ResponseWriter.WriteInt(context.Connection.WriteBuffer, -2);
+            context.ResponseWriter.WriteInt(context.Connection.Writer, -2);
             return Task.FromResult(true);
         }
 
@@ -49,13 +49,13 @@ public class TtlCommandHandler : BaseCommandHandler
         if (ttl == null)
         {
             // Key exists but has no expiration set (persistent key) - return -1
-            context.ResponseWriter.WriteInt(context.Connection.WriteBuffer, -1);
+            context.ResponseWriter.WriteInt(context.Connection.Writer, -1);
         }
         else
         {
             // Key has expiration set - return remaining time in seconds
             // Convert from milliseconds (internal storage) to seconds (Redis standard)
-            context.ResponseWriter.WriteInt(context.Connection.WriteBuffer, ttl.Value / 1000);
+            context.ResponseWriter.WriteInt(context.Connection.Writer, ttl.Value / 1000);
         }
 
         return Task.FromResult(true);

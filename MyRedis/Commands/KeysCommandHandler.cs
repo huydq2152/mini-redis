@@ -32,12 +32,12 @@ public class KeysCommandHandler : BaseCommandHandler
         
         // Write the response as a Redis array containing all key names
         // First, write the array header with the number of keys
-        context.ResponseWriter.WriteArrayHeader(context.Connection.WriteBuffer, keys.Count);
+        context.ResponseWriter.WriteArrayHeader(context.Connection.Writer, keys.Count);
         
         // Then write each key as a string element in the array
         foreach (var key in keys)
         {
-            context.ResponseWriter.WriteString(context.Connection.WriteBuffer, key);
+            context.ResponseWriter.WriteString(context.Connection.Writer, key);
         }
 
         return Task.FromResult(true);

@@ -45,12 +45,12 @@ public class GetCommandHandler : BaseCommandHandler
         if (value != null)
         {
             // Key exists and has a value - return it as a string response
-            context.ResponseWriter.WriteString(context.Connection.WriteBuffer, value);
+            context.ResponseWriter.WriteString(context.Connection.Writer, value);
         }
         else
         {
             // Key doesn't exist or was expired - return Redis nil response
-            context.ResponseWriter.WriteNil(context.Connection.WriteBuffer);
+            context.ResponseWriter.WriteNil(context.Connection.Writer);
         }
 
         return Task.FromResult(true);

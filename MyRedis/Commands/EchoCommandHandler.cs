@@ -27,7 +27,7 @@ public class EchoCommandHandler : BaseCommandHandler
         if (args.Count > 0)
         {
             // Echo the first argument back to the client as a string response
-            context.ResponseWriter.WriteString(context.Connection.WriteBuffer, args[0]);
+            context.ResponseWriter.WriteString(context.Connection.Writer, args[0]);
         }
         else
         {

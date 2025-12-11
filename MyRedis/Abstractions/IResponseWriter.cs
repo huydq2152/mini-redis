@@ -1,7 +1,13 @@
+using System.Buffers;
+
 namespace MyRedis.Abstractions;
 
 /// <summary>
 /// Abstraction for writing responses to clients using the binary protocol.
+///
+/// Performance Optimization (Production-Grade):
+/// Changed from List<byte> to IBufferWriter<byte> for zero-allocation, zero-copy writes.
+/// This eliminates GC pressure in high-throughput scenarios (C10K problem).
 ///
 /// Response Protocol Format:
 /// All responses start with a 1-byte type code, followed by type-specific data.
@@ -32,10 +38,11 @@ namespace MyRedis.Abstractions;
 ///   - Used for KEYS, ZRANGE, multi-key operations
 ///
 /// Design Philosophy:
-/// - Write methods append to the connection's write buffer
+/// - Write methods append to the connection's write buffer (IBufferWriter<byte>)
 /// - Buffer is flushed after command completion
 /// - No buffering logic here, just serialization
 /// - All integers use little-endian (x86/x64 native)
+/// - Zero-allocation: No intermediate buffers or arrays created
 /// </summary>
 public interface IResponseWriter
 {
@@ -52,10 +59,12 @@ public interface IResponseWriter
     ///
     /// The string is encoded as UTF-8 to support international characters.
     /// Length is the byte count, not character count (important for multibyte chars).
+    ///
+    /// Performance: Zero-allocation via IBufferWriter<byte>.
     /// </summary>
-    /// <param name="buffer">The connection's write buffer to append to</param>
+    /// <param name="writer">The buffer writer (from connection.Writer)</param>
     /// <param name="value">The string value to send to the client</param>
-    void WriteString(List<byte> buffer, string value);
+    void WriteString(IBufferWriter<byte> writer, string value);
 
     /// <summary>
     /// Writes an integer response to the buffer.
@@ -70,10 +79,12 @@ public interface IResponseWriter
     ///
     /// Always uses 64-bit signed integer for consistency.
     /// Little-endian matches x86/x64 architecture for efficiency.
+    ///
+    /// Performance: Zero-allocation via IBufferWriter<byte>.
     /// </summary>
-    /// <param name="buffer">The connection's write buffer to append to</param>
+    /// <param name="writer">The buffer writer (from connection.Writer)</param>
     /// <param name="value">The integer value to send to the client</param>
-    void WriteInt(List<byte> buffer, long value);
+    void WriteInt(IBufferWriter<byte> writer, long value);
 
     /// <summary>
     /// Writes a nil (null) response to the buffer.
@@ -87,9 +98,11 @@ public interface IResponseWriter
     ///
     /// This is the smallest possible response (1 byte).
     /// Equivalent to Redis's "$-1\r\n" (bulk string null) in RESP protocol.
+    ///
+    /// Performance: Zero-allocation via IBufferWriter<byte>.
     /// </summary>
-    /// <param name="buffer">The connection's write buffer to append to</param>
-    void WriteNil(List<byte> buffer);
+    /// <param name="writer">The buffer writer (from connection.Writer)</param>
+    void WriteNil(IBufferWriter<byte> writer);
 
     /// <summary>
     /// Writes an error response to the buffer.
@@ -107,11 +120,13 @@ public interface IResponseWriter
     /// Examples:
     /// - GET with no args: "ERR wrong number of arguments"
     /// - ZADD on string key: "WRONGTYPE Operation against a key holding the wrong kind of value"
+    ///
+    /// Performance: Zero-allocation via IBufferWriter<byte>.
     /// </summary>
-    /// <param name="buffer">The connection's write buffer to append to</param>
+    /// <param name="writer">The buffer writer (from connection.Writer)</param>
     /// <param name="code">Error code (currently always 1, but extensible)</param>
     /// <param name="message">Human-readable error message</param>
-    void WriteError(List<byte> buffer, int code, string message);
+    void WriteError(IBufferWriter<byte> writer, int code, string message);
 
     /// <summary>
     /// Writes an array header to the buffer (first part of an array response).
@@ -127,14 +142,16 @@ public interface IResponseWriter
     /// - MGET (multiple values) - array of strings/nils
     ///
     /// Example for ZRANGE returning ["Alice", "Bob", "Charlie"]:
-    /// 1. WriteArrayHeader(buffer, 3)
-    /// 2. WriteString(buffer, "Alice")
-    /// 3. WriteString(buffer, "Bob")
-    /// 4. WriteString(buffer, "Charlie")
+    /// 1. WriteArrayHeader(writer, 3)
+    /// 2. WriteString(writer, "Alice")
+    /// 3. WriteString(writer, "Bob")
+    /// 4. WriteString(writer, "Charlie")
     ///
     /// The client will receive: [Type 4][3]["Alice"]["Bob"]["Charlie"]
+    ///
+    /// Performance: Zero-allocation via IBufferWriter<byte>.
     /// </summary>
-    /// <param name="buffer">The connection's write buffer to append to</param>
+    /// <param name="writer">The buffer writer (from connection.Writer)</param>
     /// <param name="count">Number of elements that will follow</param>
-    void WriteArrayHeader(List<byte> buffer, int count);
+    void WriteArrayHeader(IBufferWriter<byte> writer, int count);
 }
