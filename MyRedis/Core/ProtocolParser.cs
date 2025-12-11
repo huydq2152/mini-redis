@@ -40,6 +40,70 @@ namespace MyRedis.Core;
 public static class ProtocolParser
 {
     /// <summary>
+    /// Maps a byte span to an interned command name string for zero-allocation command parsing.
+    ///
+    /// Performance Optimization - String Interning:
+    /// Redis command names are repeated millions of times (GET, SET, DEL, etc.).
+    /// Instead of allocating a new string for each command, we return interned strings.
+    ///
+    /// Zero-Allocation Strategy:
+    /// - Uses u8 literals (C# 11) for direct byte comparison (no string allocation)
+    /// - SequenceEqual is optimized by JIT (SIMD vectorization)
+    /// - Returns same string instance for same command (interning)
+    ///
+    /// Performance Impact (10K requests/sec):
+    /// - Without interning: 10K string allocations/sec for command names = GC pressure
+    /// - With interning: 0 allocations for known commands = no GC
+    ///
+    /// Case Handling:
+    /// Redis commands are case-insensitive, but clients typically send uppercase.
+    /// We check both uppercase and lowercase for compatibility.
+    ///
+    /// Fallback:
+    /// Unknown commands still allocate (unavoidable), but this is rare
+    /// (only custom commands or typos).
+    /// </summary>
+    /// <param name="span">The byte span containing the command name</param>
+    /// <returns>Interned string for known commands, allocated string for unknown commands</returns>
+    private static string MapCommand(ReadOnlySpan<byte> span)
+    {
+        // Hot path commands (90%+ of traffic in typical Redis workloads)
+        // Checked first for optimal branch prediction
+        if (span.SequenceEqual("GET"u8)) return "GET";
+        if (span.SequenceEqual("SET"u8)) return "SET";
+        if (span.SequenceEqual("DEL"u8)) return "DEL";
+
+        // Common commands (sorted by typical usage frequency)
+        if (span.SequenceEqual("PING"u8)) return "PING";
+        if (span.SequenceEqual("ECHO"u8)) return "ECHO";
+        if (span.SequenceEqual("KEYS"u8)) return "KEYS";
+        if (span.SequenceEqual("TTL"u8)) return "TTL";
+        if (span.SequenceEqual("EXPIRE"u8)) return "EXPIRE";
+
+        // Sorted set commands
+        if (span.SequenceEqual("ZADD"u8)) return "ZADD";
+        if (span.SequenceEqual("ZRANGE"u8)) return "ZRANGE";
+
+        // Case-insensitive support (lowercase variants)
+        // Less common but supported for compatibility
+        if (span.SequenceEqual("get"u8)) return "GET"; // Normalize to uppercase
+        if (span.SequenceEqual("set"u8)) return "SET";
+        if (span.SequenceEqual("del"u8)) return "DEL";
+        if (span.SequenceEqual("ping"u8)) return "PING";
+        if (span.SequenceEqual("echo"u8)) return "ECHO";
+        if (span.SequenceEqual("keys"u8)) return "KEYS";
+        if (span.SequenceEqual("ttl"u8)) return "TTL";
+        if (span.SequenceEqual("expire"u8)) return "EXPIRE";
+        if (span.SequenceEqual("zadd"u8)) return "ZADD";
+        if (span.SequenceEqual("zrange"u8)) return "ZRANGE";
+
+        // Fallback: Unknown command - must allocate
+        // This is rare (custom commands, typos, or future commands)
+        // Convert to uppercase for consistency with command registry
+        return Encoding.UTF8.GetString(span).ToUpperInvariant();
+    }
+
+    /// <summary>
     /// Attempts to parse one complete command from the buffer.
     ///
     /// Returns:
@@ -84,7 +148,7 @@ public static class ProtocolParser
     /// <param name="bytesConsumed">Output: Bytes used from buffer (0 if incomplete)</param>
     /// <returns>True if a complete command was parsed, false if more data needed</returns>
     /// <exception cref="Exception">Thrown if argument count exceeds safety limit</exception>
-    public static bool TryParse(byte[] buffer, int dataLen, out List<string> command, out int bytesConsumed)
+    public static bool TryParse(byte[] buffer, int dataLen, out List<string>? command, out int bytesConsumed)
     {
         // Initialize output parameters for failure case
         command = null;
@@ -129,10 +193,27 @@ public static class ProtocolParser
             if (span.Length - offset < strLen)
                 return false; // Incomplete - need more data
 
-            // Decode the UTF-8 string
-            // Note: For performance, could keep as byte[] and decode lazily
-            // Current approach prioritizes simplicity
-            string str = Encoding.UTF8.GetString(span.Slice(offset, (int)strLen));
+            // Get the argument as a byte span
+            ReadOnlySpan<byte> argSpan = span.Slice(offset, (int)strLen);
+
+            // Performance Optimization: Use string interning for command name (first argument)
+            // Command names are repeated millions of times (GET, SET, etc.)
+            // Interning eliminates allocations for known commands
+            string str;
+            if (i == 0)
+            {
+                // First argument = command name
+                // Use MapCommand to return interned string (zero allocation for known commands)
+                str = MapCommand(argSpan);
+            }
+            else
+            {
+                // Subsequent arguments = keys, values, scores, etc.
+                // These are unique per request, must allocate
+                // No optimization possible here (unavoidable allocation)
+                str = Encoding.UTF8.GetString(argSpan);
+            }
+
             result.Add(str);
 
             // Move offset past this string
