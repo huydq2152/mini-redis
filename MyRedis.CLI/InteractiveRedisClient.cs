@@ -166,7 +166,10 @@ namespace MyRedis.CLI
 
                 case 1:
                     // Type 1: Error - command execution failed
-                    return "(error)";
+                    // Format: [Type 1][4-byte code][4-byte msg len][UTF-8 message]
+                    // CRITICAL: Must read the error code and message to consume them from the stream!
+                    // If we don't, they'll corrupt the next response.
+                    return ReadError();
 
                 case 2:
                     // Type 2: String - variable-length string value
@@ -234,6 +237,35 @@ namespace MyRedis.CLI
             }
 
             return result.ToString();
+        }
+
+        /// <summary>
+        /// Reads an error response from the network stream.
+        /// Format: [4 bytes: error code][4 bytes: message length][UTF-8 message]
+        ///
+        /// CRITICAL: This method MUST read all error data to prevent stream corruption.
+        /// If we skip reading the error message, it will remain in the stream and
+        /// corrupt the next response.
+        /// </summary>
+        private string ReadError()
+        {
+            // Read error code
+            byte[] codeBuf = new byte[4];
+            _stream.Read(codeBuf, 0, 4);
+            int errorCode = BitConverter.ToInt32(codeBuf, 0);
+
+            // Read message length
+            byte[] lenBuf = new byte[4];
+            _stream.Read(lenBuf, 0, 4);
+            int messageLength = BitConverter.ToInt32(lenBuf, 0);
+
+            // Read error message
+            byte[] msgData = new byte[messageLength];
+            _stream.Read(msgData, 0, messageLength);
+            string errorMessage = Encoding.UTF8.GetString(msgData);
+
+            // Format like redis-cli: (error) MESSAGE
+            return $"(error) {errorMessage}";
         }
 
         /// <summary>
