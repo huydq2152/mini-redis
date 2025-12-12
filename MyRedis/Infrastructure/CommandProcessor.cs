@@ -161,6 +161,28 @@ public class CommandProcessor
                 // cmd is a list of strings: ["GET", "key"] or ["SET", "key", "value"]
                 Console.WriteLine($"[Command] {string.Join(" ", cmd)}");
 
+                // CRITICAL: Check if previous command has unsent data (partial send)
+                // If so, we CANNOT process a new command yet - we must wait for the
+                // pending write to complete first to avoid corrupting the response stream
+                if (connection.WriteBufferOffset > 0 && connection.WriteBufferOffset < connection.WrittenCount)
+                {
+                    // Previous command's response hasn't been fully sent yet
+                    // This should be rare (only happens with large responses or slow clients)
+                    // We MUST NOT execute the new command because:
+                    // 1. New response would corrupt the unsent portion of previous response
+                    // 2. Response order would be violated (pipelining requires in-order responses)
+                    //
+                    // Solution: Skip this command for now, it will be processed in the next
+                    // event loop iteration after the pending write completes
+                    Console.WriteLine($"[WARNING] Skipping command due to pending write: {string.Join(" ", cmd)}");
+                    break; // Exit the processing loop, wait for write to complete
+                }
+
+                // CRITICAL FIX: Reset write buffer BEFORE executing command
+                // This ensures each command starts with a clean slate
+                // Without this, previous error responses can corrupt new responses
+                connection.ResetWriteBuffer();
+
                 // Execute the command (call the appropriate handler)
                 await ExecuteCommandAsync(connection, cmd);
 

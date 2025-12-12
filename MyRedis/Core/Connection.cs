@@ -271,6 +271,37 @@ public class Connection
     public int WrittenCount => _writeBuffer.WrittenCount;
 
     /// <summary>
+    /// Resets the write buffer to prepare for a new command's response.
+    ///
+    /// CRITICAL for Command Isolation:
+    /// This method MUST be called before executing each command to ensure
+    /// that responses don't get corrupted by residual data from previous commands.
+    ///
+    /// Why This Is Needed:
+    /// - Command 1: Writes error response, Flush() sends it
+    /// - Command 2: Writes success response
+    /// - Without reset: Command 2's response may include Command 1's residual data
+    ///
+    /// Bug Scenario (FIXED):
+    /// 1. Client sends: "GET name huy" (wrong syntax, 3 args)
+    /// 2. Server writes error to buffer and flushes
+    /// 3. Client sends: "GET name" (correct syntax)
+    /// 4. WITHOUT RESET: Buffer still has residual error bytes
+    /// 5. Server appends success response to error bytes = CORRUPTION
+    /// 6. Client receives garbled response
+    ///
+    /// Performance:
+    /// - O(1) operation - only resets count, doesn't zero memory
+    /// - No allocations
+    /// - Safe to call even if buffer is already empty
+    /// </summary>
+    public void ResetWriteBuffer()
+    {
+        _writeBuffer.ResetWrittenCount();
+        WriteBufferOffset = 0;
+    }
+
+    /// <summary>
     /// Tracks how many bytes have been successfully sent from the write buffer.
     ///
     /// Used for handling partial sends on non-blocking sockets:
