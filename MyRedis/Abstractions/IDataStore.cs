@@ -67,10 +67,13 @@ public interface IDataStore
     /// <summary>
     /// Sets a value for the given key, overwriting any existing value.
     ///
+    /// DEPRECATED: Use SetWithType() instead for explicit type tracking.
+    ///
     /// This operation:
     /// - Creates the key if it doesn't exist
     /// - Overwrites the existing value if the key exists
-    /// - Does NOT remove expiration times (use ExpirationService.RemoveExpiration if needed)
+    /// - Defaults to RedisType.String (may be incorrect!)
+    /// - Preserves existing expiration if key already exists
     ///
     /// The value can be any object:
     /// - string (for simple key-value storage)
@@ -80,6 +83,33 @@ public interface IDataStore
     /// <param name="key">The key</param>
     /// <param name="value">The value to store (any object or null)</param>
     void Set(string key, object? value);
+
+    /// <summary>
+    /// Sets a value with explicit type and optional expiration (RECOMMENDED).
+    ///
+    /// This is the preferred method for command handlers to ensure:
+    /// - Correct type tracking (enables WRONGTYPE error detection)
+    /// - Explicit expiration management
+    /// - No ambiguity about data types
+    ///
+    /// Usage Examples:
+    /// ```csharp
+    /// // SET command
+    /// dataStore.SetWithType(key, stringValue, RedisType.String, expireAt: -1);
+    ///
+    /// // SET command with expiration
+    /// long expireAt = Environment.TickCount64 + (ttl * 1000);
+    /// dataStore.SetWithType(key, value, RedisType.String, expireAt);
+    ///
+    /// // ZADD command
+    /// dataStore.SetWithType(key, sortedSet, RedisType.SortedSet, expireAt: -1);
+    /// ```
+    /// </summary>
+    /// <param name="key">The Redis key</param>
+    /// <param name="value">The value to store</param>
+    /// <param name="type">The Redis data type (String, SortedSet, etc.)</param>
+    /// <param name="expireAt">Absolute expiration timestamp (-1 for no expiration)</param>
+    void SetWithType(string key, object? value, Storage.RedisType type, long expireAt = -1);
 
     /// <summary>
     /// Removes a key and its value from the store.
