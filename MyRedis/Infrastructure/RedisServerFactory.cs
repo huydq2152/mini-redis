@@ -206,7 +206,8 @@ public static class RedisServerFactory
     /// - GetCommandHandler: GET key
     /// - SetCommandHandler: SET key value
     /// - DelCommandHandler: DEL key [key ...]
-    /// - KeysCommandHandler: KEYS pattern
+    /// - KeysCommandHandler: KEYS pattern (DEPRECATED in production)
+    /// - ScanCommandHandler: SCAN cursor [MATCH pattern] [COUNT count] (production-safe iteration)
     /// - PingCommandHandler: PING [message]
     /// - EchoCommandHandler: ECHO message
     /// - ExpireCommandHandler: EXPIRE key seconds
@@ -252,6 +253,7 @@ public static class RedisServerFactory
             new SetCommandHandler(),                     // SET key value
             new DelCommandHandler(backgroundWorker),     // DEL key [key ...] (needs BackgroundWorker)
             new KeysCommandHandler(),                    // KEYS pattern
+            new ScanCommandHandler(),                    // SCAN cursor [MATCH pattern] [COUNT count]
             new PingCommandHandler(),                    // PING [message]
             new EchoCommandHandler(),                    // ECHO message
             new ExpireCommandHandler(),                  // EXPIRE key seconds
