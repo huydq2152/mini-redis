@@ -178,7 +178,7 @@ public class CommandProcessor
                     break; // Exit the processing loop, wait for write to complete
                 }
 
-                // CRITICAL FIX: Reset write buffer BEFORE executing command
+                // CRITICAL: Reset write buffer BEFORE executing command
                 // This ensures each command starts with a clean slate
                 // Without this, previous error responses can corrupt new responses
                 connection.ResetWriteBuffer();

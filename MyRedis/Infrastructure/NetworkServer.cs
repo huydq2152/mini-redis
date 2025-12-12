@@ -408,6 +408,33 @@ public class NetworkServer
 
         try
         {
+            // Check if buffer is full before reading
+            // This prevents the "4KB Wall" deadlock where:
+            // 1. Buffer is full (BytesRead == Length)
+            // 2. Receive(buffer, offset, size=0) returns 0
+            // 3. Server mistakenly thinks client disconnected
+            //
+            // When buffer is full, there are two possibilities:
+            // A) Parse will succeed (command complete) -> ShiftBuffer frees space
+            // B) Parse will fail (command incomplete) -> Need to grow buffer
+            //
+            // We grow the buffer preemptively when full.
+            // If parse succeeds, next read will use the larger buffer (no harm).
+            // If parse fails, we've already grown (prevents deadlock).
+            if (conn.BytesRead == conn.ReadBuffer.Length)
+            {
+                // Buffer is full - try to grow it
+                if (!conn.GrowBuffer())
+                {
+                    // Growth failed: Exceeded MAX_BUFFER_SIZE (512MB)
+                    // This is a protocol error - command is too large
+                    Console.WriteLine($"[Protocol Error] Command exceeds maximum size ({Connection.MaxBufferSize} bytes)");
+                    HandleDisconnect(clientSocket);
+                    return 0;
+                }
+                // Buffer successfully grown - continue to read
+            }
+
             // Read data from socket into connection buffer
             // Parameters:
             // - buffer: The byte array to read into

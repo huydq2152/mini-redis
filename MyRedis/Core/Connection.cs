@@ -15,9 +15,10 @@ namespace MyRedis.Core;
 /// - Linked list node reference for idle tracking (intrusive pattern)
 ///
 /// Buffer Management Strategy:
-/// - Fixed-size read buffer (4KB) - sufficient for most Redis commands
-/// - Dynamic write buffer (List<byte>) - grows as needed for responses
+/// - Dynamic read buffer (initial 4KB, grows as needed up to 512MB)
+/// - Dynamic write buffer (ArrayBufferWriter) - grows as needed for responses
 /// - Read buffer compaction (ShiftBuffer) to avoid copying
+/// - Buffer growth (GrowBuffer) to handle large commands
 ///
 /// Lifecycle:
 /// 1. Created by NetworkServer when a client connects
@@ -33,6 +34,30 @@ namespace MyRedis.Core;
 public class Connection
 {
     /// <summary>
+    /// Maximum allowed size for the read buffer (512MB).
+    ///
+    /// This matches Redis's proto-max-bulk-len configuration:
+    /// - Default: 512MB (536,870,912 bytes)
+    /// - Prevents DoS attacks via memory exhaustion
+    /// - Allows legitimate large values (e.g., storing images, JSON blobs)
+    ///
+    /// Why 512MB?
+    /// - Redis default, battle-tested in production
+    /// - Large enough for legitimate use cases
+    /// - Small enough to prevent single connection from consuming all memory
+    ///
+    /// If a client sends a command requiring more than 512MB:
+    /// - Buffer growth is denied
+    /// - Connection is closed with protocol error
+    /// - Prevents malicious clients from crashing the server
+    ///
+    /// Example: Client sends SET key [600MB value]
+    /// - Buffer grows: 4KB -> 8KB -> 16KB -> ... -> 512MB
+    /// - Next growth attempt (512MB -> 1GB) is rejected
+    /// - Connection closed, error logged
+    /// </summary>
+    public const int MaxBufferSize = 512 * 1024 * 1024; // 512MB
+    /// <summary>
     /// The underlying TCP socket for this connection.
     ///
     /// Used by NetworkServer for:
@@ -44,24 +69,38 @@ public class Connection
     public Socket Socket { get; }
 
     /// <summary>
-    /// Fixed-size buffer for incoming data from the client.
+    /// Dynamic buffer for incoming data from the client.
     ///
-    /// Size: 4KB (4096 bytes)
+    /// Initial Size: 4KB (4096 bytes)
     /// - Sufficient for most Redis commands
     /// - Small enough to avoid wasting memory per connection
     /// - Matches typical MTU sizes for efficient network I/O
     ///
+    /// Growth Strategy (Dynamic Resizing):
+    /// When buffer is full and parsing fails (incomplete command):
+    /// - Double the buffer size (standard exponential growth)
+    /// - Maximum size: 512MB (configurable, matches Redis proto-max-bulk-len)
+    /// - If max exceeded: Close connection with protocol error
+    ///
+    /// Why Dynamic Growth Is Critical:
+    /// Without it, commands larger than buffer size cause DEADLOCK:
+    /// 1. Buffer fills (4096 bytes)
+    /// 2. Parse fails (need more data, e.g., 5KB value)
+    /// 3. Receive(buffer, 4096, size=0) returns 0
+    /// 4. Connection incorrectly closed (mistaken for graceful disconnect)
+    ///
     /// Redis protocol commands typically range from:
     /// - 20-100 bytes for simple commands (GET, SET)
     /// - 500-2000 bytes for complex commands (ZADD with multiple elements)
-    /// - 4KB handles pipelined commands well
+    /// - 4KB-1MB for bulk data (SET with large values, MGET responses)
+    /// - Up to 512MB for extreme cases (limited by proto-max-bulk-len)
     ///
     /// When buffer fills up:
     /// - Commands are parsed and removed via ShiftBuffer()
     /// - This makes room for more data
-    /// - If a single command exceeds 4KB, it would fail (protocol limit)
+    /// - If still full after parsing, buffer grows automatically
     /// </summary>
-    public byte[] ReadBuffer { get; } = new byte[4096];
+    public byte[] ReadBuffer { get; private set; } = new byte[4096];
 
     /// <summary>
     /// Number of valid bytes currently in the ReadBuffer.
@@ -191,6 +230,98 @@ public class Connection
 
         // Update the count of valid bytes in the buffer
         BytesRead = remaining;
+    }
+
+    /// <summary>
+    /// Grows the read buffer to accommodate larger commands.
+    ///
+    /// "4KB Wall" Deadlock:
+    /// This method prevents the server from freezing when clients send commands
+    /// larger than the current buffer size.
+    ///
+    /// The Problem (Before This Fix):
+    /// 1. Client sends SET key [5KB value]
+    /// 2. Buffer fills to 4096 bytes
+    /// 3. Parser sees strLen=5120, but only 4096 bytes available → returns false
+    /// 4. Socket.Select() reports socket still has data
+    /// 5. HandleRead() calls Receive(buffer, 4096, size=0) → returns 0
+    /// 6. Server thinks client disconnected → closes connection incorrectly
+    ///
+    /// The Solution (With This Fix):
+    /// 1. Client sends SET key [5KB value]
+    /// 2. Buffer fills to 4096 bytes
+    /// 3. Parser returns false (need more data)
+    /// 4. GrowBuffer() is called → buffer expands to 8192 bytes
+    /// 5. Receive() can now read remaining 1024 bytes
+    /// 6. Parser succeeds, command executes correctly
+    ///
+    /// Growth Strategy:
+    /// - Exponential growth (double the size each time)
+    /// - Prevents frequent reallocations for incrementally larger commands
+    /// - Amortized O(1) cost over many growth operations
+    ///
+    /// Example Growth Sequence:
+    /// - 4KB → 8KB → 16KB → 32KB → 64KB → ... → 512MB (max)
+    ///
+    /// Performance Characteristics:
+    /// - Time: O(N) where N = current buffer size (copy existing data)
+    /// - Space: Doubles memory usage (but capped at MAX_BUFFER_SIZE)
+    /// - Amortized: O(1) per byte written over lifetime of buffer
+    ///
+    /// Memory Management:
+    /// - Old buffer becomes eligible for GC immediately
+    /// - Modern GC (Gen 0/1) handles this efficiently
+    /// - Only happens for large commands (rare in practice)
+    ///
+    /// DoS Protection:
+    /// - Maximum size: 512MB (MAX_BUFFER_SIZE)
+    /// - If exceeded: Returns false (caller should close connection)
+    /// - Prevents memory exhaustion attacks
+    ///
+    /// Alternative Approaches (Not Used):
+    /// - Fixed large buffer: Wastes memory for small commands (99% of cases)
+    /// - Circular buffer: Complex, doesn't eliminate size limit
+    /// - Linked list of chunks: Fragmentation, slower parsing
+    /// </summary>
+    /// <returns>True if buffer was grown successfully, false if max size exceeded</returns>
+    public bool GrowBuffer()
+    {
+        int currentSize = ReadBuffer.Length;
+
+        // Calculate new size (double current size)
+        // Use long to prevent overflow when currentSize is large
+        long newSizeLong = (long)currentSize * 2;
+
+        // Check if growth would exceed maximum allowed size
+        if (newSizeLong > MaxBufferSize)
+        {
+            // Cannot grow: Already at or near maximum size
+            // Caller should close connection with protocol error
+            Console.WriteLine($"[Buffer] Cannot grow beyond {currentSize} bytes (max: {MaxBufferSize})");
+            return false;
+        }
+
+        int newSize = (int)newSizeLong;
+
+        // Allocate new larger buffer
+        byte[] newBuffer = new byte[newSize];
+
+        // Copy existing data to new buffer
+        // Only copy valid bytes (BytesRead), not entire old buffer
+        Array.Copy(
+            sourceArray: ReadBuffer,
+            sourceIndex: 0,
+            destinationArray: newBuffer,
+            destinationIndex: 0,
+            length: BytesRead
+        );
+
+        // Replace old buffer with new buffer
+        // Old buffer becomes eligible for GC
+        ReadBuffer = newBuffer;
+
+        Console.WriteLine($"[Buffer] Grew from {currentSize} to {newSize} bytes (data: {BytesRead} bytes)");
+        return true;
     }
 
     /// <summary>
