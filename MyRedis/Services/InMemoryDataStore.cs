@@ -1,5 +1,6 @@
 using MyRedis.Abstractions;
 using MyRedis.Storage;
+using MyRedis.Storage.DataStructures;
 
 namespace MyRedis.Services;
 
@@ -159,7 +160,8 @@ public class InMemoryDataStore : IDataStore
             }
 
             // Key exists and is not expired
-            return entry.Value;
+            // Extract value from RedisValue union (may box integers/doubles)
+            return entry.Value.AsObject();
         }
     }
 
@@ -219,8 +221,9 @@ public class InMemoryDataStore : IDataStore
                 return null;
             }
 
-            // Type-safe cast
-            return entry.Value is T typedValue ? typedValue : null;
+            // Type-safe cast - extract value from RedisValue union
+            object? value = entry.Value.AsObject();
+            return value is T typedValue ? typedValue : null;
         }
     }
 
@@ -269,8 +272,7 @@ public class InMemoryDataStore : IDataStore
             if (_db.TryGetValue(key, out var existing))
             {
                 // Update existing entry (preserve expiration)
-                existing.Value = value;
-                existing.Type = RedisType.String; // Assume string by default
+                _db[key] = RedisEntry.String(value as string, expireAt: existing.ExpireAt);
             }
             else
             {
@@ -303,12 +305,17 @@ public class InMemoryDataStore : IDataStore
     {
         lock (_lock)
         {
-            _db[key] = new RedisEntry
+            // Create appropriate RedisEntry based on type
+            RedisEntry entry = type switch
             {
-                Value = value,
-                Type = type,
-                ExpireAt = expireAt
+                RedisType.Integer => RedisEntry.Integer((long)value!, expireAt),
+                RedisType.Double => RedisEntry.Double((double)value!, expireAt),
+                RedisType.String => RedisEntry.String(value as string, expireAt),
+                RedisType.SortedSet => RedisEntry.SortedSet((SortedSet)value!, expireAt),
+                _ => throw new ArgumentException($"Unsupported Redis type: {type}")
             };
+
+            _db[key] = entry;
         }
     }
 
