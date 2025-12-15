@@ -18,11 +18,35 @@ namespace MyRedis.CLI
     /// 2 = String (variable-length string)
     /// 3 = Integer (64-bit signed integer)
     /// 4 = Array (variable-length array of values)
+    ///
+    /// Pipelining Support:
+    /// Supports Redis-style pipelining for high-throughput scenarios:
+    /// - Queue multiple commands without waiting for responses
+    /// - Send all commands in a single TCP packet
+    /// - Receive all responses in batch
+    /// - Dramatically improves throughput (10x-100x faster for bulk operations)
+    ///
+    /// Usage Modes:
+    /// 1. Interactive Mode (default): Send command → Wait for response
+    /// 2. Pipeline Mode: Queue commands → EXEC → Batch responses
+    /// 3. File Pipeline Mode: Load commands from file → Batch execute
     /// </summary>
     public class InteractiveRedisClient : IDisposable
     {
         private readonly TcpClient _client;
         private readonly NetworkStream _stream;
+
+        /// <summary>
+        /// Pipeline mode: Queue for commands waiting to be sent in batch.
+        /// When in pipeline mode, commands are collected here instead of sent immediately.
+        /// </summary>
+        private readonly List<string> _pipelineQueue = new();
+
+        /// <summary>
+        /// Indicates whether the client is in pipeline mode.
+        /// In pipeline mode, commands are queued instead of sent immediately.
+        /// </summary>
+        public bool InPipelineMode { get; private set; } = false;
 
         /// <summary>
         /// Creates a new interactive Redis client and connects to the specified server.
@@ -40,17 +64,42 @@ namespace MyRedis.CLI
         /// Parses a command string into arguments and sends it to the server.
         /// Handles quoted strings to support arguments with spaces.
         ///
+        /// Pipelining Behavior:
+        /// - If InPipelineMode=false: Sends command immediately (default)
+        /// - If InPipelineMode=true: Queues command for batch execution
+        ///
         /// Examples:
         /// - "SET name John" -> ["SET", "name", "John"]
         /// - "SET name \"John Doe\"" -> ["SET", "name", "John Doe"]
         /// </summary>
         /// <param name="commandLine">The command line to parse and send</param>
-        public void SendCommand(string commandLine)
+        /// <returns>True if command was sent/queued successfully</returns>
+        public bool SendCommand(string commandLine)
         {
             // Parse the command line into arguments
             var args = ParseCommandLine(commandLine);
-            if (args.Length == 0) return;
+            if (args.Length == 0) return false;
 
+            // If in pipeline mode, queue the command instead of sending
+            if (InPipelineMode)
+            {
+                _pipelineQueue.Add(commandLine);
+                Console.WriteLine("Queued.");
+                return true;
+            }
+
+            // Normal mode: Send command immediately
+            SendCommandImmediate(args);
+            return true;
+        }
+
+        /// <summary>
+        /// Sends a single command immediately to the server.
+        /// Used for both normal mode and pipeline execution.
+        /// </summary>
+        /// <param name="args">Parsed command arguments</param>
+        private void SendCommandImmediate(string[] args)
+        {
             // Build the binary protocol packet
             using var ms = new MemoryStream();
             Span<byte> intBuffer = stackalloc byte[4];
@@ -71,6 +120,211 @@ namespace MyRedis.CLI
             // Send the packet
             var packet = ms.ToArray();
             _stream.Write(packet);
+        }
+
+        /// <summary>
+        /// Enters pipeline mode where commands are queued instead of sent immediately.
+        ///
+        /// Usage:
+        /// > PIPELINE
+        /// Entering pipeline mode. Commands will be queued. Type EXEC to send all.
+        /// pipeline> SET key1 value1
+        /// Queued.
+        /// pipeline> GET key1
+        /// Queued.
+        /// pipeline> EXEC
+        /// Executing 2 commands...
+        /// 1) OK
+        /// 2) "value1"
+        /// </summary>
+        public void EnterPipelineMode()
+        {
+            if (InPipelineMode)
+            {
+                Console.WriteLine("Already in pipeline mode.");
+                return;
+            }
+
+            InPipelineMode = true;
+            _pipelineQueue.Clear();
+            Console.WriteLine("Entering pipeline mode. Commands will be queued.");
+            Console.WriteLine("Type EXEC to send all commands, or DISCARD to cancel.");
+        }
+
+        /// <summary>
+        /// Exits pipeline mode and discards all queued commands.
+        /// </summary>
+        public void DiscardPipeline()
+        {
+            if (!InPipelineMode)
+            {
+                Console.WriteLine("Not in pipeline mode.");
+                return;
+            }
+
+            int count = _pipelineQueue.Count;
+            InPipelineMode = false;
+            _pipelineQueue.Clear();
+            Console.WriteLine($"Pipeline discarded. {count} command(s) removed.");
+        }
+
+        /// <summary>
+        /// Executes all queued commands in a single batch (pipelining).
+        ///
+        /// Performance:
+        /// - Sends all commands in one TCP packet (reduces network round-trips)
+        /// - Server processes commands sequentially
+        /// - Receives all responses in batch
+        /// - Typical speedup: 10x-100x faster than individual commands
+        ///
+        /// Algorithm:
+        /// 1. Send all queued commands in one packet
+        /// 2. Read responses for each command
+        /// 3. Display results with numbering
+        /// </summary>
+        /// <returns>Number of commands executed</returns>
+        public int ExecutePipeline()
+        {
+            if (!InPipelineMode)
+            {
+                Console.WriteLine("Not in pipeline mode. Use PIPELINE to enter.");
+                return 0;
+            }
+
+            if (_pipelineQueue.Count == 0)
+            {
+                Console.WriteLine("No commands queued.");
+                InPipelineMode = false;
+                return 0;
+            }
+
+            int commandCount = _pipelineQueue.Count;
+            Console.WriteLine($"Executing {commandCount} command(s) in pipeline...\n");
+
+            // Build a single packet with all commands
+            using var ms = new MemoryStream();
+
+            foreach (var commandLine in _pipelineQueue)
+            {
+                var args = ParseCommandLine(commandLine);
+                Span<byte> intBuffer = stackalloc byte[4];
+
+                // Write argument count
+                BinaryPrimitives.WriteUInt32LittleEndian(intBuffer, (uint)args.Length);
+                ms.Write(intBuffer);
+
+                // Write each argument with its length prefix
+                foreach (var arg in args)
+                {
+                    byte[] strBytes = Encoding.UTF8.GetBytes(arg);
+                    BinaryPrimitives.WriteUInt32LittleEndian(intBuffer, (uint)strBytes.Length);
+                    ms.Write(intBuffer);
+                    ms.Write(strBytes);
+                }
+            }
+
+            // Send the entire batch in one packet
+            var packet = ms.ToArray();
+            _stream.Write(packet);
+            _stream.Flush();
+
+            // Read responses for each command
+            for (int i = 0; i < commandCount; i++)
+            {
+                Console.WriteLine($"{i + 1}) {ReadResponse()}");
+            }
+
+            // Clean up and exit pipeline mode
+            InPipelineMode = false;
+            _pipelineQueue.Clear();
+
+            Console.WriteLine($"\nPipeline completed: {commandCount} command(s) executed.");
+            return commandCount;
+        }
+
+        /// <summary>
+        /// Loads and executes commands from a file in pipeline mode.
+        ///
+        /// File Format:
+        /// Each line is a separate command:
+        /// SET key1 value1
+        /// SET key2 value2
+        /// GET key1
+        /// GET key2
+        ///
+        /// Blank lines and lines starting with # are ignored (comments).
+        ///
+        /// Performance:
+        /// Same as ExecutePipeline() - all commands sent in one batch.
+        /// </summary>
+        /// <param name="filePath">Path to file containing commands</param>
+        /// <returns>Number of commands executed, or -1 on error</returns>
+        public int ExecuteFromFile(string filePath)
+        {
+            if (!File.Exists(filePath))
+            {
+                Console.WriteLine($"Error: File not found: {filePath}");
+                return -1;
+            }
+
+            Console.WriteLine($"Loading commands from {filePath}...");
+
+            // Read and parse file
+            var commands = new List<string>();
+            foreach (var line in File.ReadAllLines(filePath))
+            {
+                var trimmed = line.Trim();
+
+                // Skip empty lines and comments
+                if (string.IsNullOrWhiteSpace(trimmed) || trimmed.StartsWith("#"))
+                    continue;
+
+                commands.Add(trimmed);
+            }
+
+            if (commands.Count == 0)
+            {
+                Console.WriteLine("No valid commands found in file.");
+                return 0;
+            }
+
+            Console.WriteLine($"Loaded {commands.Count} command(s). Executing pipeline...\n");
+
+            // Build a single packet with all commands
+            using var ms = new MemoryStream();
+
+            foreach (var commandLine in commands)
+            {
+                var args = ParseCommandLine(commandLine);
+                Span<byte> intBuffer = stackalloc byte[4];
+
+                // Write argument count
+                BinaryPrimitives.WriteUInt32LittleEndian(intBuffer, (uint)args.Length);
+                ms.Write(intBuffer);
+
+                // Write each argument with its length prefix
+                foreach (var arg in args)
+                {
+                    byte[] strBytes = Encoding.UTF8.GetBytes(arg);
+                    BinaryPrimitives.WriteUInt32LittleEndian(intBuffer, (uint)strBytes.Length);
+                    ms.Write(intBuffer);
+                    ms.Write(strBytes);
+                }
+            }
+
+            // Send the entire batch in one packet
+            var packet = ms.ToArray();
+            _stream.Write(packet);
+            _stream.Flush();
+
+            // Read responses for each command
+            for (int i = 0; i < commands.Count; i++)
+            {
+                Console.WriteLine($"{i + 1}) {ReadResponse()}");
+            }
+
+            Console.WriteLine($"\nFile pipeline completed: {commands.Count} command(s) executed.");
+            return commands.Count;
         }
 
         /// <summary>
