@@ -39,13 +39,36 @@ public class ExpireCommandHandler : BaseCommandHandler
             return Task.FromResult(true);
         }
 
-        // Check if the key exists in the data store
-        if (context.DataStore.Exists(key))
+        // Get the current value to check if key exists
+        var value = context.DataStore.Get(key);
+        if (value != null)
         {
-            // Set expiration time (convert seconds to milliseconds for internal storage)
-            // The expiration service handles the actual cleanup when the timeout is reached
+            // CRITICAL: Must update BOTH the RedisEntry.ExpireAt AND ExpirationService!
+            // - RedisEntry.ExpireAt: Used for lazy expiration (Get/Exists checks)
+            // - ExpirationService: Used for active expiration (background cleanup)
+
+            // Calculate absolute expiration time
+            long expireAt = Environment.TickCount64 + (seconds * 1000);
+
+            // Determine the type of the existing value
+            Storage.RedisType type;
+            if (value is string)
+                type = Storage.RedisType.String;
+            else if (value is Storage.DataStructures.SortedSet)
+                type = Storage.RedisType.SortedSet;
+            else if (value is long)
+                type = Storage.RedisType.Integer;
+            else if (value is double)
+                type = Storage.RedisType.Double;
+            else
+                throw new InvalidOperationException($"Unsupported value type: {value.GetType()}");
+
+            // Update the RedisEntry with new expiration (preserving value and type)
+            context.DataStore.SetWithType(key, value, type, expireAt);
+
+            // Also update ExpirationService for active expiration
             context.ExpirationService.SetExpiration(key, seconds * 1000);
-            
+
             // Return 1 to indicate the timeout was successfully set
             context.ResponseWriter.WriteInt(context.Connection.Writer, 1);
         }

@@ -49,7 +49,7 @@ public class ZAddCommandHandler : BaseCommandHandler
         {
             // Key doesn't exist - create a new sorted set
             value = new SortedSet();
-            context.DataStore.Set(key, value);
+            context.DataStore.SetWithType(key, value, Storage.RedisType.SortedSet);
         }
 
         // Verify the value is actually a sorted set (type safety)

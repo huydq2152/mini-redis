@@ -35,7 +35,8 @@ public class SetCommandHandler : BaseCommandHandler
 
         // Store the key-value pair in the data store
         // This will overwrite any existing value at this key
-        context.DataStore.Set(key, value);
+        // Redis SET command removes any existing TTL (expireAt = -1)
+        context.DataStore.SetWithType(key, value, Storage.RedisType.String, expireAt: -1);
         
         // Redis SET command typically returns "OK" but this implementation uses nil
         // Both are valid Redis responses for successful SET operations
