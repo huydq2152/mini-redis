@@ -20,6 +20,16 @@ namespace MyRedis.Core;
 /// - This avoids the O(n) cost of searching and removing from the middle of the heap
 /// - Old entries become "garbage" and are skipped during processing
 ///
+/// Redis Implementation Comparison:
+/// - Redis uses "Active Expiration" with random sampling (20 keys every 100ms)
+/// - This approach scales to millions of keys without long blocking times
+/// - Redis can do this efficiently because it has direct access to hash table buckets (C implementation)
+/// - Our Priority Queue approach guarantees deterministic expiration ordering
+/// - For high-scale scenarios (millions of keys), consider migrating to Redis-style random sampling:
+///   * Replace PriorityQueue with List<string> for O(1) random access
+///   * Use "swap-remove" technique to clean stale entries during sampling
+///   * Trade deterministic ordering for better scalability
+///
 /// Thread Safety: Not thread-safe (relies on single-threaded event loop).
 /// For multi-threaded scenarios, add lock protection.
 /// </summary>
