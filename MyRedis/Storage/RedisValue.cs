@@ -36,21 +36,23 @@ namespace MyRedis.Storage;
 /// Memory Layout (64-bit system):
 /// ```
 /// Offset 0-7:  RedisType _type (1 byte + 7 padding)
-/// Offset 8-15: Union {
+/// Offset 8-15: Union (value types only) {
 ///     long _int64Value;      // 8 bytes
 ///     double _doubleValue;   // 8 bytes
-///     object? _objectValue;  // 8 bytes (pointer)
 /// }
-/// Total: 16 bytes
+/// Offset 16-23: object? _objectValue;  // 8 bytes (pointer, separate from union)
+/// Total: 24 bytes
 /// ```
 ///
-/// C-Style Union:
-/// Using StructLayout(LayoutKind.Explicit), all value fields overlap at offset 8.
+/// C-Style Union (with CLR constraints):
+/// Using StructLayout(LayoutKind.Explicit), value fields (_int64Value, _doubleValue)
+/// overlap at offset 8. The object reference (_objectValue) CANNOT overlap with value
+/// types due to CLR garbage collection requirements - it must be at a separate offset.
 /// Only one field is valid at a time, determined by _type discriminator.
 ///
 /// CRITICAL: Pass by Reference
 /// ```csharp
-/// // ❌ BAD: Copies 16 bytes on every call
+/// // ❌ BAD: Copies 24 bytes on every call
 /// void Process(RedisValue value) { }
 ///
 /// // ✅ GOOD: Passes 8-byte pointer, no copy
@@ -75,7 +77,7 @@ namespace MyRedis.Storage;
 ///
 /// Our RedisValue is simpler (no refcount, no encoding variants) but same concept.
 /// </summary>
-[StructLayout(LayoutKind.Explicit, Size = 16)]
+[StructLayout(LayoutKind.Explicit, Size = 24)]
 public readonly struct RedisValue
 {
     /// <summary>
@@ -98,7 +100,7 @@ public readonly struct RedisValue
     /// <summary>
     /// Integer value (INCR/DECR operations) - NO BOXING.
     ///
-    /// Offset 8: Overlaps with _doubleValue and _objectValue (union).
+    /// Offset 8: Overlaps with _doubleValue (value-type union).
     ///
     /// Used for:
     /// - INCR/DECR commands (counters)
@@ -116,7 +118,7 @@ public readonly struct RedisValue
     /// <summary>
     /// Double-precision floating point (INCRBYFLOAT, sorted set scores).
     ///
-    /// Offset 8: Overlaps with _int64Value and _objectValue (union).
+    /// Offset 8: Overlaps with _int64Value (value-type union).
     ///
     /// Used for:
     /// - INCRBYFLOAT command
@@ -129,7 +131,8 @@ public readonly struct RedisValue
     /// <summary>
     /// Reference type value (strings, SortedSet, etc.).
     ///
-    /// Offset 8: Overlaps with _int64Value and _doubleValue (union).
+    /// Offset 16: Separate from value-type union (CLR requirement).
+    /// Object references cannot overlap with value types due to GC tracking.
     ///
     /// Used for:
     /// - String type: string object
@@ -140,7 +143,7 @@ public readonly struct RedisValue
     /// - 8 bytes (pointer to heap object)
     /// - Actual object stored on heap
     /// </summary>
-    [FieldOffset(8)]
+    [FieldOffset(16)]
     private readonly object? _objectValue;
 
     /// <summary>
