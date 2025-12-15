@@ -213,6 +213,30 @@ public class AvlTree
     }
 
     /// <summary>
+    /// Removes a key-score pair from the AVL tree, maintaining balance.
+    /// This is the public interface for Redis ZREM command implementation and score updates.
+    /// </summary>
+    /// <param name="key">The member key to remove</param>
+    /// <param name="score">The score associated with the key (required for tree navigation)</param>
+    /// <returns>true if the node was found and removed, false if not found</returns>
+    /// <remarks>
+    /// Removal maintains Redis sorted set semantics:
+    /// - Uses same comparison logic as insertion (score then key)
+    /// - Automatic rebalancing ensures O(log n) performance
+    /// - Returns false if the key-score pair doesn't exist
+    ///
+    /// Why both key AND score are required:
+    /// The AVL tree is sorted by (score, key), so to locate a node we need both values.
+    /// This matches Redis internal behavior where the sorted set maintains score-based ordering.
+    /// </remarks>
+    public bool Remove(string key, double score)
+    {
+        var (newRoot, removed) = Delete(Root, key, score);
+        Root = newRoot;
+        return removed;
+    }
+
+    /// <summary>
     /// Recursively inserts a new node into the AVL tree while maintaining balance and sorted order.
     /// This is the internal implementation that handles the recursive insertion logic.
     /// </summary>
@@ -253,6 +277,120 @@ public class AvlTree
         // Rebalance the tree during recursive unwinding to maintain AVL properties
         // This ensures the tree remains height-balanced after insertion
         return Balance(node);
+    }
+
+    // === DELETION OPERATIONS ===
+
+    /// <summary>
+    /// Recursively deletes a node from the AVL tree while maintaining balance.
+    /// This is the internal implementation that handles the recursive deletion logic.
+    /// </summary>
+    /// <param name="node">Current subtree root</param>
+    /// <param name="key">Member key to delete</param>
+    /// <param name="score">Score associated with the key</param>
+    /// <returns>Tuple of (new subtree root after deletion, whether node was found and removed)</returns>
+    /// <remarks>
+    /// Deletion Algorithm (Standard BST deletion with AVL rebalancing):
+    /// 1. Find the node to delete using BST search (compare by score, then key)
+    /// 2. Handle three cases:
+    ///    a) Node is a leaf (no children): Simply remove by returning null
+    ///    b) Node has one child: Replace node with its child
+    ///    c) Node has two children: Replace node data with in-order successor, then delete successor
+    /// 3. Rebalance the tree during recursive unwinding to maintain AVL properties
+    ///
+    /// In-Order Successor Strategy (for case c):
+    /// - Find the leftmost (minimum) node in the right subtree
+    /// - This node has the next-larger value and at most one child (right)
+    /// - Replace current node's data with successor's data
+    /// - Recursively delete the successor (which falls into case a or b)
+    ///
+    /// Performance: O(log n) due to tree height and rebalancing operations
+    ///
+    /// Return Value:
+    /// - Item1 (AvlNode?): New root of the subtree after deletion and rebalancing
+    /// - Item2 (bool): true if node was found and removed, false if not found
+    /// </remarks>
+    private (AvlNode?, bool) Delete(AvlNode? node, string key, double score)
+    {
+        // Base case: Node not found
+        if (node == null) return (null, false);
+
+        // Determine search direction using Redis sorted set comparison logic
+        int compare = score.CompareTo(node.Score);
+        if (compare == 0) compare = string.Compare(key, node.Key, StringComparison.Ordinal);
+
+        bool removed;
+
+        if (compare < 0)
+        {
+            // Key is in left subtree
+            (node.Left, removed) = Delete(node.Left, key, score);
+        }
+        else if (compare > 0)
+        {
+            // Key is in right subtree
+            (node.Right, removed) = Delete(node.Right, key, score);
+        }
+        else
+        {
+            // Node found! Handle the three deletion cases
+            removed = true;
+
+            // Case 1: Node is a leaf (no children)
+            if (node.Left == null && node.Right == null)
+            {
+                return (null, true);
+            }
+
+            // Case 2a: Node has only right child
+            if (node.Left == null)
+            {
+                return (node.Right, true);
+            }
+
+            // Case 2b: Node has only left child
+            if (node.Right == null)
+            {
+                return (node.Left, true);
+            }
+
+            // Case 3: Node has two children
+            // Replace with in-order successor (leftmost node in right subtree)
+            var successor = FindMin(node.Right);
+            node.Key = successor.Key;
+            node.Score = successor.Score;
+
+            // Delete the successor (which has at most one child)
+            (node.Right, _) = Delete(node.Right, successor.Key, successor.Score);
+        }
+
+        // Rebalance the tree during recursive unwinding if deletion occurred
+        // No rebalancing needed if node wasn't found (removed == false)
+        if (!removed) return (node, false);
+
+        return (Balance(node), true);
+    }
+
+    /// <summary>
+    /// Finds the minimum node (leftmost) in a subtree.
+    /// Used to find the in-order successor during deletion.
+    /// </summary>
+    /// <param name="node">Root of the subtree to search (must not be null)</param>
+    /// <returns>The leftmost (minimum) node in the subtree</returns>
+    /// <remarks>
+    /// This helper method is used by the Delete operation when handling nodes with two children.
+    /// The leftmost node in a subtree is the in-order successor (next-larger value) of a node.
+    ///
+    /// Performance: O(log n) in a balanced tree, but typically O(1) for successor finding
+    /// since we only traverse from the right child to its leftmost descendant.
+    /// </remarks>
+    private AvlNode FindMin(AvlNode node)
+    {
+        while (node.Left != null)
+        {
+            node = node.Left;
+        }
+        return node;
     }
 
     // === RANGE QUERY OPERATIONS ===

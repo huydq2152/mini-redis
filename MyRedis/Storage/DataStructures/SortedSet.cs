@@ -61,37 +61,62 @@ public class SortedSet
     public int Count => _dict.Count;
 
     /// <summary>
-    /// Adds a new member with the specified score to the sorted set.
+    /// Adds a new member with the specified score to the sorted set, or updates the score if the member already exists.
     /// This method implements the core functionality of the Redis ZADD command.
     /// </summary>
     /// <param name="key">The member name (unique identifier)</param>
     /// <param name="score">The numeric score for sorting</param>
     /// <returns>
     /// true if the member was newly added to the set.
-    /// false if the member already exists (duplicate key).
+    /// false if the member already existed (score updated or unchanged).
     /// </returns>
     /// <remarks>
-    /// Current Implementation (Simplified):
-    /// - Rejects duplicate keys without updating scores
-    /// - Real Redis behavior: updates the score of existing members
-    /// 
+    /// Redis ZADD Behavior:
+    /// - If member doesn't exist: Add new member, return true
+    /// - If member exists with different score: Update score, return false
+    /// - If member exists with same score: No change, return false
+    ///
     /// Algorithm:
     /// 1. Check dictionary for existing membership (O(1))
-    /// 2. If new, add to both dictionary and AVL tree (O(log n))
-    /// 3. Tree insertion maintains sorted order and balance
-    /// 
-    /// Redis Compatibility Notes:
-    /// - In actual Redis, ZADD returns count of newly added elements
-    /// - Score updates would require removing old entry and inserting new one
-    /// - Future enhancement: implement score update logic
+    /// 2. If exists:
+    ///    a. Get old score from dictionary
+    ///    b. If score changed: remove old (key, oldScore) from tree, add new (key, newScore)
+    ///    c. Update dictionary with new score
+    ///    d. Return false (member already existed)
+    /// 3. If new:
+    ///    a. Add to both dictionary and AVL tree (O(log n))
+    ///    b. Return true (new member added)
+    ///
+    /// Performance:
+    /// - New member: O(log n) for tree insertion
+    /// - Score update: O(log n) for tree removal + O(log n) for tree insertion = O(log n)
+    /// - Same score: O(1) for dictionary lookup only
+    ///
+    /// Redis Compatibility:
+    /// - Matches Redis ZADD default behavior (add or update)
+    /// - Return value matches Redis semantics (count of NEW elements only)
     /// </remarks>
     public bool Add(string key, double score)
     {
-        // Simplified logic: reject duplicates rather than updating scores
-        // Real Redis behavior: update existing member's score if key exists
-        if (_dict.ContainsKey(key)) return false;
+        // Check if member already exists
+        if (_dict.TryGetValue(key, out double oldScore))
+        {
+            // Member exists - check if score needs updating
+            if (oldScore != score)
+            {
+                // Score changed: remove old entry from tree and add new one
+                _tree.Remove(key, oldScore);
+                _tree.Add(key, score);
 
-        // Add to both data structures to maintain consistency
+                // Update dictionary with new score
+                _dict[key] = score;
+            }
+
+            // Member already existed (updated or unchanged)
+            return false;
+        }
+
+        // New member: add to both data structures to maintain consistency
         _dict[key] = score;
         _tree.Add(key, score);
         return true;
@@ -110,13 +135,51 @@ public class SortedSet
     /// - ZSCORE: Get score of a specific member
     /// - Conditional operations based on current scores
     /// - Score validation before updates
-    /// 
+    ///
     /// Performance: O(1) dictionary lookup, much faster than tree traversal.
     /// </remarks>
     public double? GetScore(string key)
     {
         if (_dict.TryGetValue(key, out double score)) return score;
         return null;
+    }
+
+    /// <summary>
+    /// Removes a member from the sorted set.
+    /// This implements the core functionality of the Redis ZREM command.
+    /// </summary>
+    /// <param name="key">The member name to remove</param>
+    /// <returns>
+    /// true if the member was found and removed.
+    /// false if the member doesn't exist in the set.
+    /// </returns>
+    /// <remarks>
+    /// Algorithm:
+    /// 1. Check dictionary for member existence (O(1))
+    /// 2. If found, get the score from dictionary
+    /// 3. Remove from both dictionary and AVL tree (O(log n))
+    /// 4. Tree removal maintains sorted order and balance
+    ///
+    /// Performance: O(log n) due to AVL tree removal operation
+    ///
+    /// Redis Compatibility:
+    /// - Matches Redis ZREM behavior (remove member by name only)
+    /// - Returns true/false for single member (ZREM returns count for multiple)
+    /// - Maintains consistency between dictionary and tree structures
+    /// </remarks>
+    public bool Remove(string key)
+    {
+        // Check if member exists and get its score
+        if (!_dict.TryGetValue(key, out double score))
+        {
+            return false; // Member doesn't exist
+        }
+
+        // Remove from both data structures to maintain consistency
+        _dict.Remove(key);
+        _tree.Remove(key, score);
+
+        return true;
     }
 
     /// <summary>

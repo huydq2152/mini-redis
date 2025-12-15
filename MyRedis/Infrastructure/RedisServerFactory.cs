@@ -214,6 +214,7 @@ public static class RedisServerFactory
     /// - TtlCommandHandler: TTL key
     /// - ZAddCommandHandler: ZADD key score member
     /// - ZRangeCommandHandler: ZRANGE key start stop
+    /// - ZRemCommandHandler: ZREM key member [member ...]
     ///
     /// Handler Registration:
     /// - Create handler instance
@@ -259,7 +260,8 @@ public static class RedisServerFactory
             new ExpireCommandHandler(),                  // EXPIRE key seconds
             new TtlCommandHandler(),                     // TTL key
             new ZAddCommandHandler(),                    // ZADD key score member
-            new ZRangeCommandHandler()                   // ZRANGE key start stop
+            new ZRangeCommandHandler(),                  // ZRANGE key start stop
+            new ZRemCommandHandler()                     // ZREM key member [member ...]
         };
 
         // Register each handler with the command registry

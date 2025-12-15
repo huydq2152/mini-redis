@@ -92,6 +92,13 @@ public class InMemoryDataStore : IDataStore
     /// - Old: 2 × 48 bytes = 96 bytes overhead per key
     /// - New: 88 bytes overhead per key
     /// - Savings: ~8 bytes per key + eliminated duplicate key strings
+    /// 
+    /// TODO: At scale (10M+ keys), standard Dictionary causes LOH fragmentation and GC pauses.
+    /// Future Upgrade: Redis in C use Incremental Resizing solution
+    /// With C#, Incremental Resizing solution need manual hash table implementation instead of Dictionary.
+    /// Can read more some simple best practice for optimizing Dictionary performance in:
+    /// https://coldfusion-example.blogspot.com/2025/02/boost-efficiency-deep-dive-into-c.html
+    /// Better solution: implement Sharded Dictionary (1024 partitions) to bound resize latency.
     /// </summary>
     private readonly Dictionary<string, RedisEntry> _db = new();
 
