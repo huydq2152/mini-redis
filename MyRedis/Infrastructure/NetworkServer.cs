@@ -110,7 +110,7 @@ namespace MyRedis.Infrastructure;
 /// 
 /// Option C: I/O Thread + Event Queue - Redis 6.0 Style
 /// ┌─────────────────────────────────────────────────────────────────┐
-/// │ Pros: Best of both (O(1) I/O + single-thread commands)         │
+/// │ Pros: Best of both (O(1) I/O + single-thread commands)          │
 /// │ Cons: Most complex, dedicated I/O thread management             │
 /// │ Effort: ~2-3 weeks                                              │
 /// │ Pattern: Dedicated I/O thread → lock-free queue → main thread   │

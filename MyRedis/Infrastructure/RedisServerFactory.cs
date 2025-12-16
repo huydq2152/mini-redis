@@ -346,14 +346,31 @@ public static class RedisServerFactory
                 c.Resolve<IResponseWriter>()));   // To pass to handlers (for response formatting)
 
         // Register BackgroundTaskManager
-        // Coordinates background maintenance tasks
-        // Depends on: IDataStore, IExpirationService, IConnectionManager, NetworkServer
+        // Coordinates background maintenance tasks using registry pattern
+        // Tasks are registered separately for extensibility (Open/Closed Principle)
         container.RegisterSingleton<BackgroundTaskManager>(c =>
-            new BackgroundTaskManager(
-                c.Resolve<IDataStore>(),          // To delete expired keys
-                c.Resolve<IExpirationService>(),  // To find expired keys
-                c.Resolve<IConnectionManager>(),  // To find idle connections
-                c.Resolve<NetworkServer>()));     // To close idle connections
+        {
+            var manager = new BackgroundTaskManager();
+
+            // Register key expiration task (high priority: 100)
+            // Processes expired keys to prevent memory bloat
+            manager.Register(new ExpirationTask(
+                c.Resolve<IDataStore>(),
+                c.Resolve<IExpirationService>()));
+
+            // Register idle connection cleanup task (normal priority: 50)
+            // Closes connections that haven't sent data in 5+ minutes
+            manager.Register(new IdleConnectionCleanupTask(
+                c.Resolve<IConnectionManager>(),
+                c.Resolve<NetworkServer>()));
+
+            // Future tasks can be added here without modifying BackgroundTaskManager:
+            // manager.Register(new MetricsCollectionTask(metricsService));
+            // manager.Register(new PersistenceSnapshotTask(snapshotService));
+            // manager.Register(new ClusterHeartbeatTask(clusterService));
+
+            return manager;
+        });
 
         // Register RedisServerOrchestrator
         // Coordinates the main event loop
