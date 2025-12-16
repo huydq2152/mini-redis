@@ -1,5 +1,6 @@
 using MyRedis.Abstractions;
 using MyRedis.System;
+using MyRedis.System.BackgroundTask;
 
 namespace MyRedis.Commands;
 
@@ -26,19 +27,20 @@ public class DelCommandHandler : BaseCommandHandler
     private const int LazyFreeThreshold = 64;
 
     /// <summary>
-    /// Background worker for handling asynchronous deletion of large objects.
-    /// This prevents the main Redis thread from being blocked during expensive cleanup operations.
+    /// Background task system for handling asynchronous deletion of large objects.
+    /// Uses the LazyFree category to prevent the main Redis thread from being blocked
+    /// during expensive cleanup operations.
     /// </summary>
-    private readonly BackgroundWorker _backgroundWorker;
+    private readonly BackgroundTaskSystem _backgroundTaskSystem;
 
     /// <summary>
-    /// Initializes a new instance of the DelCommandHandler with the required background worker.
+    /// Initializes a new instance of the DelCommandHandler with the required background task system.
     /// </summary>
-    /// <param name="backgroundWorker">The background worker for asynchronous operations</param>
-    /// <exception cref="ArgumentNullException">Thrown when backgroundWorker is null</exception>
-    public DelCommandHandler(BackgroundWorker backgroundWorker)
+    /// <param name="backgroundTaskSystem">The background task system for categorized asynchronous operations</param>
+    /// <exception cref="ArgumentNullException">Thrown when backgroundTaskSystem is null</exception>
+    public DelCommandHandler(BackgroundTaskSystem backgroundTaskSystem)
     {
-        _backgroundWorker = backgroundWorker ?? throw new ArgumentNullException(nameof(backgroundWorker));
+        _backgroundTaskSystem = backgroundTaskSystem ?? throw new ArgumentNullException(nameof(backgroundTaskSystem));
     }
 
     /// <summary>
@@ -76,7 +78,8 @@ public class DelCommandHandler : BaseCommandHandler
             {
                 // Large objects (>= 64 elements): Use asynchronous deletion to avoid blocking
                 // This implements Redis UNLINK-like behavior for better performance
-                _backgroundWorker.Submit(() => DestroyObject(value));
+                // Submits to LazyFree category for isolation from other background operations
+                _backgroundTaskSystem.Submit(BackgroundTaskCategory.LazyFree, () => DestroyObject(value));
             }
             else
             {

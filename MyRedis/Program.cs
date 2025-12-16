@@ -1,4 +1,5 @@
 ﻿using MyRedis.Infrastructure;
+using MyRedis.System.BackgroundTask;
 
 // ============================================================================
 // MyRedis Server - Main Entry Point
@@ -26,6 +27,9 @@ Console.WriteLine("Starting MyRedis Server...");
 Console.WriteLine("Architecture: Clean, SOLID-compliant implementation");
 Console.WriteLine("Features: Command handlers, dependency injection, separation of concerns");
 Console.WriteLine("Press Ctrl+C to stop the server");
+
+// Declare backgroundTaskSystem in outer scope for access in finally block
+BackgroundTaskSystem? backgroundTaskSystem = null;
 
 try
 {
@@ -61,7 +65,8 @@ try
     // - Core services (data store, command registry, expiration, connections)
     // - Command handlers (GET, SET, ZADD, ZRANGE, EXPIRE, etc.)
     // - Infrastructure (network server, processor, background tasks)
-    var server = RedisServerFactory.CreateServer();
+    // Returns both the server orchestrator and background task system for shutdown control
+    (var server, backgroundTaskSystem) = RedisServerFactory.CreateServer();
 
     // Start the main event loop
     // This will run until the cancellation token is triggered (Ctrl+C)
@@ -83,6 +88,42 @@ catch (Exception ex)
     // Log the error for debugging purposes
     Console.WriteLine($"[Fatal Error] {ex.Message}");
     Console.WriteLine(ex.StackTrace);
+}
+finally
+{
+    // Graceful shutdown: Wait for background tasks to complete
+    // This ensures large object deletions finish before process exits
+    // Critical for preventing "zombie tasks" and ensuring clean termination
+    if (backgroundTaskSystem != null)
+    {
+        Console.WriteLine("[Shutdown] Waiting for background tasks to complete...");
+
+        try
+        {
+            // Wait up to 10 seconds for all workers to finish their queues
+            // Each worker has its own timeout (LazyFree: 5s, Persistence: 30s)
+            // System timeout is global - whichever completes first
+            bool cleanShutdown = await backgroundTaskSystem.ShutdownAsync(TimeSpan.FromSeconds(10));
+
+            if (cleanShutdown)
+            {
+                Console.WriteLine("[Shutdown] All background tasks completed successfully");
+            }
+            else
+            {
+                // Timeout occurred - some tasks were forcibly stopped
+                // Acceptable for LazyFree (just memory cleanup)
+                // Warning for Persistence (potential data loss in future)
+                Console.WriteLine("[Shutdown] Warning: Some background tasks timed out (forced shutdown)");
+            }
+        }
+        catch (Exception ex)
+        {
+            // Unexpected error during shutdown
+            // Log but continue shutdown (don't block process exit)
+            Console.WriteLine($"[Shutdown] Error during background task shutdown: {ex.Message}");
+        }
+    }
 }
 
 Console.WriteLine("[Shutdown] Server shutdown complete");

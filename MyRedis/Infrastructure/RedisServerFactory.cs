@@ -3,6 +3,7 @@ using MyRedis.Commands;
 using MyRedis.Core;
 using MyRedis.Services;
 using MyRedis.System;
+using MyRedis.System.BackgroundTask;
 
 namespace MyRedis.Infrastructure;
 
@@ -98,8 +99,9 @@ public static class RedisServerFactory
     /// - Servers don't share state
     /// </summary>
     /// <param name="port">TCP port to listen on (default: 6379)</param>
-    /// <returns>Fully-configured RedisServerOrchestrator ready to run</returns>
-    public static RedisServerOrchestrator CreateServer(int port = 6379)
+    /// <returns>Tuple of (orchestrator, backgroundTaskSystem) - orchestrator ready to run, system for shutdown</returns>
+    public static (RedisServerOrchestrator orchestrator, BackgroundTaskSystem backgroundTaskSystem)
+        CreateServer(int port = 6379)
     {
         // Create the dependency injection container
         // This manages all service instances and resolves dependencies
@@ -120,10 +122,13 @@ public static class RedisServerFactory
         // Must be registered last because they depend on core services
         RegisterInfrastructureComponents(container, port);
 
-        // STEP 4: Resolve and return the orchestrator
+        // STEP 4: Resolve and return the orchestrator and background task system
         // Container automatically resolves all dependencies recursively
-        // Returns fully-configured server ready to run
-        return container.Resolve<RedisServerOrchestrator>();
+        // Returns fully-configured server ready to run plus background system for shutdown control
+        return (
+            container.Resolve<RedisServerOrchestrator>(),
+            container.Resolve<BackgroundTaskSystem>()
+        );
     }
 
     /// <summary>
@@ -172,8 +177,9 @@ public static class RedisServerFactory
         // IdleManager: Intrusive linked list for tracking connection activity
         container.RegisterSingleton(new IdleManager());
 
-        // BackgroundWorker: Legacy component for deferred operations
-        container.RegisterSingleton(new BackgroundWorker());
+        // BackgroundTaskSystem: Categorized worker system for production use
+        // Configure with LazyFree + Persistence categories for task isolation
+        container.RegisterSingleton(CreateBackgroundTaskSystem());
 
         // Register service abstractions (interfaces)
         // These provide clean APIs for core functionality
@@ -196,6 +202,45 @@ public static class RedisServerFactory
         // Factory resolves IdleManager from container and wraps it
         container.RegisterSingleton<IConnectionManager>(c =>
             new ConnectionManager(c.Resolve<IdleManager>()));
+    }
+
+    /// <summary>
+    /// Creates BackgroundTaskSystem with optimized configuration for MyRedis workloads.
+    ///
+    /// Configured Categories:
+    /// - LazyFree: For DEL command async deletion of large objects (current usage)
+    /// - Persistence: For future AOF/RDB implementation (high likelihood next feature)
+    ///
+    /// Why only 2 categories?
+    /// YAGNI principle - add FileOps, Network, Maintenance when actually needed.
+    /// Open/Closed Principle - adding new categories later is trivial (one entry in options).
+    ///
+    /// Configuration Rationale:
+    /// LazyFree:
+    /// - Unbounded queue (0): Memory cleanup should never be throttled
+    /// - 5s timeout: Large SortedSets may take time to destroy
+    ///
+    /// Persistence:
+    /// - Bounded queue (100): Prevents memory exhaustion if disk too slow
+    /// - 30s timeout: Must complete all writes for durability guarantees
+    /// </summary>
+    private static BackgroundTaskSystem CreateBackgroundTaskSystem()
+    {
+        var options = new Dictionary<BackgroundTaskCategory, CategoryWorker.Options>
+        {
+            [BackgroundTaskCategory.LazyFree] = new()
+            {
+                MaxQueueSize = 0,         // Unbounded - accept all deletion requests
+                ShutdownTimeoutMs = 5000  // 5 seconds for large object cleanup
+            },
+            [BackgroundTaskCategory.Persistence] = new()
+            {
+                MaxQueueSize = 100,        // Bounded - backpressure if disk too slow
+                ShutdownTimeoutMs = 30000  // 30 seconds for durability guarantees
+            }
+        };
+
+        return new BackgroundTaskSystem(options);
     }
 
     /// <summary>
@@ -236,23 +281,23 @@ public static class RedisServerFactory
     ///
     /// Handler Dependencies:
     /// - Most handlers have no dependencies (stateless)
-    /// - DelCommandHandler needs BackgroundWorker (for deferred cleanup)
+    /// - DelCommandHandler needs BackgroundTaskSystem (for categorized deferred cleanup)
     /// - Dependencies are passed via constructor
     /// </summary>
     private static void RegisterCommandHandlers(ServiceContainer container)
     {
         // Resolve dependencies needed by some handlers
         var registry = container.Resolve<ICommandRegistry>();
-        var backgroundWorker = container.Resolve<BackgroundWorker>();
+        var backgroundTaskSystem = container.Resolve<BackgroundTaskSystem>();
 
         // Create instances of all command handlers
         // Most handlers are stateless (no constructor parameters)
-        // DelCommandHandler needs BackgroundWorker for deferred cleanup
+        // DelCommandHandler needs BackgroundTaskSystem for deferred cleanup
         var handlers = new ICommandHandler[]
         {
             new GetCommandHandler(),                     // GET key
             new SetCommandHandler(),                     // SET key value
-            new DelCommandHandler(backgroundWorker),     // DEL key [key ...] (needs BackgroundWorker)
+            new DelCommandHandler(backgroundTaskSystem),     // DEL key [key ...] (needs BackgroundTaskSystem)
             new KeysCommandHandler(),                    // KEYS pattern
             new ScanCommandHandler(),                    // SCAN cursor [MATCH pattern] [COUNT count]
             new PingCommandHandler(),                    // PING [message]
