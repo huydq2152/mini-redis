@@ -19,16 +19,72 @@ namespace MyRedis.Core;
 /// - When processing, we check the dictionary to see if the entry is still valid
 /// - This avoids the O(n) cost of searching and removing from the middle of the heap
 /// - Old entries become "garbage" and are skipped during processing
+/// 
+/// TODO: Zombie Entry Cleanup Strategies (Future Enhancement)
 ///
-/// Redis Implementation Comparison:
-/// - Redis uses "Active Expiration" with random sampling (20 keys every 100ms)
-/// - This approach scales to millions of keys without long blocking times
-/// - Redis can do this efficiently because it has direct access to hash table buckets (C implementation)
-/// - Our Priority Queue approach guarantees deterministic expiration ordering
-/// - For high-scale scenarios (millions of keys), consider migrating to Redis-style random sampling:
-///   * Replace PriorityQueue with List<string> for O(1) random access
-///   * Use "swap-remove" technique to clean stale entries during sampling
-///   * Trade deterministic ordering for better scalability
+/// Current Approach: Lazy cleanup during processing (simple, but accumulates "zombie" entries)
+///
+/// Alternative Solutions for High-Scale Scenarios:
+///
+/// Solution A: Garbage Collection Threshold
+/// ┌─────────────────────────────────────────────────────────────┐
+/// │  Track heap size vs dictionary size ratio                   │
+/// │  When heap.Count > dictionary.Count × 2:                    │
+/// │  - Rebuild heap from dictionary entries only                │
+/// │  - O(n log n) operation but infrequent                      │
+/// │                                                             │
+/// │  Pros: Automatic cleanup, memory bounded                    │
+/// │  Cons: Periodic rebuild cost                                │
+/// └─────────────────────────────────────────────────────────────┘
+///
+/// Solution B: Custom Indexed Heap (Decrease-Key Support)
+/// ┌─────────────────────────────────────────────────────────────┐
+/// │  Heap + Dictionary<key, heapIndex> for O(log n) updates     │
+/// │  - Insert: O(log n)                                         │
+/// │  - Update existing: O(log n) decrease/increase-key          │
+/// │  - Delete by key: O(log n)                                  │
+/// │                                                             │
+/// │  On SetExpiration:                                          │
+/// │  - If key exists: update priority in-place                  │
+/// │  - If key new: insert normally                              │
+/// │                                                             │
+/// │  Pros: No zombie entries, optimal memory usage              │
+/// │  Cons: Complex custom implementation                        │
+/// └─────────────────────────────────────────────────────────────┘
+///
+/// Solution C: Redis-Style Random Sampling (Million+ Keys)
+/// ┌─────────────────────────────────────────────────────────────┐
+/// │  Replace PriorityQueue with expiration buckets              │
+/// │  - Sample 20 random keys every 100ms                        │
+/// │  - Check if expired, remove if so                           │
+/// │  - Continue if >25% of sample was expired                   │
+/// │                                                             │
+/// │  Pros: Scales to millions of keys, constant time            │
+/// │  Cons: Non-deterministic expiration timing                  │
+/// └─────────────────────────────────────────────────────────────┘
+///
+/// Solution D: Redis-Style Active Expiration (Production Redis Approach)
+/// ┌─────────────────────────────────────────────────────────────┐
+/// │  Redis Implementation Comparison:                           │
+/// │  - Redis uses "Active Expiration" with random sampling      │
+/// │    (20 keys every 100ms)                                    │
+/// │  - This approach scales to millions of keys without long    │                              
+/// │    blocking times                                           │
+/// │  - Redis can do this efficiently because it has direct      │  
+/// │    access to hash table buckets (C implementation)          │
+/// │  - Our Priority Queue approach guarantees deterministic     │
+/// │    expiration ordering                                      │
+/// │  - For high-scale scenarios (millions of keys), consider    │
+/// │    migrating to Redis-style random sampling:                │
+/// │    * Replace PriorityQueue with List<string> for O(1)       │
+/// │      random access                                          │
+/// │    * Use "swap-remove" technique to clean stale entries     │
+/// │      during sampling                                        │
+/// │    * Trade deterministic ordering for better scalability    │
+/// │                                                             │
+/// │  Pros: Proven at Redis scale, constant time per cycle       │
+/// │  Cons: Non-deterministic, requires more complex logic       │
+/// └─────────────────────────────────────────────────────────────┘
 ///
 /// Thread Safety: Not thread-safe (relies on single-threaded event loop).
 /// For multi-threaded scenarios, add lock protection.
