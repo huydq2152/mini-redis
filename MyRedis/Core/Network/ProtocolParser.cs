@@ -42,7 +42,7 @@ public static class ProtocolParser
     /// <summary>
     /// Maps a byte span to an interned command name string for zero-allocation command parsing.
     ///
-    /// Performance Optimization - String Interning:
+    /// Use string Interning:
     /// Redis command names are repeated millions of times (GET, SET, DEL, etc.).
     /// Instead of allocating a new string for each command, we return interned strings.
     ///
@@ -50,18 +50,7 @@ public static class ProtocolParser
     /// - Uses u8 literals (C# 11) for direct byte comparison (no string allocation)
     /// - SequenceEqual is optimized by JIT (SIMD vectorization)
     /// - Returns same string instance for same command (interning)
-    ///
-    /// Performance Impact (10K requests/sec):
-    /// - Without interning: 10K string allocations/sec for command names = GC pressure
-    /// - With interning: 0 allocations for known commands = no GC
-    ///
-    /// Case Handling:
-    /// Redis commands are case-insensitive, but clients typically send uppercase.
-    /// We check both uppercase and lowercase for compatibility.
-    ///
-    /// Fallback:
-    /// Unknown commands still allocate (unavoidable), but this is rare
-    /// (only custom commands or typos).
+    /// 
     /// </summary>
     /// <param name="span">The byte span containing the command name</param>
     /// <returns>Interned string for known commands, allocated string for unknown commands</returns>
@@ -86,7 +75,7 @@ public static class ProtocolParser
 
         // Case-insensitive support (lowercase variants)
         // Less common but supported for compatibility
-        if (span.SequenceEqual("get"u8)) return "GET"; // Normalize to uppercase
+        if (span.SequenceEqual("get"u8)) return "GET";
         if (span.SequenceEqual("set"u8)) return "SET";
         if (span.SequenceEqual("del"u8)) return "DEL";
         if (span.SequenceEqual("ping"u8)) return "PING";
@@ -129,14 +118,6 @@ public static class ProtocolParser
     /// - Remove consumed bytes from buffer (ShiftBuffer)
     /// - Try to parse again (loop until TryParse returns false)
     ///
-    /// Example Usage:
-    /// <code>
-    /// while (TryParse(buffer, bytesRead, out var cmd, out int consumed)) {
-    ///     ProcessCommand(cmd);
-    ///     ShiftBuffer(consumed);
-    /// }
-    /// </code>
-    ///
     /// Security:
     /// - Throws if argument count > 1024 (DoS protection)
     /// - Validates lengths before reading data
@@ -157,14 +138,14 @@ public static class ProtocolParser
         // Use Span for efficient, bounds-checked memory access
         // Span avoids array bounds checks on each access (JIT optimization)
         var span = buffer.AsSpan(0, dataLen);
-        int offset = 0;
+        var offset = 0;
 
         // Step 1: Read the argument count header (4 bytes)
         if (span.Length < 4)
-            return false; // Need at least 4 bytes for the count
+            return false;
 
         // Read argument count as 32-bit unsigned little-endian integer
-        uint nStr = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(offset, 4));
+        var nStr = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(offset, 4));
         offset += 4;
 
         // Security: Limit argument count to prevent memory exhaustion
@@ -179,19 +160,19 @@ public static class ProtocolParser
         var result = new List<string>((int)nStr);
 
         // Step 2: Read each argument (length-prefixed string)
-        for (int i = 0; i < nStr; i++)
+        for (var i = 0; i < nStr; i++)
         {
             // Check if we have 4 bytes for the string length
             if (span.Length - offset < 4)
-                return false; // Incomplete - need more data
+                return false;
 
             // Read string length as 32-bit unsigned little-endian integer
-            uint strLen = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(offset, 4));
+            var strLen = BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(offset, 4));
             offset += 4;
 
             // Check if we have all the string content
             if (span.Length - offset < strLen)
-                return false; // Incomplete - need more data
+                return false;
 
             // Get the argument as a byte span
             ReadOnlySpan<byte> argSpan = span.Slice(offset, (int)strLen);

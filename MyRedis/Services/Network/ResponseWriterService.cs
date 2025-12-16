@@ -13,10 +13,6 @@ namespace MyRedis.Services.Network;
 /// enabling dependency injection and providing a testable abstraction for response formatting.
 /// This allows command handlers to be unit tested with mock response writers.
 ///
-/// Performance Optimization (Production-Grade):
-/// Updated to use IBufferWriter<byte> instead of List<byte> for zero-allocation writes.
-/// This eliminates GC pressure in high-throughput scenarios (C10K problem).
-///
 /// Redis Binary Protocol Format:
 /// All responses follow a binary protocol with type-length-value encoding:
 ///

@@ -20,11 +20,6 @@ namespace MyRedis.Core.Background;
 /// - Runs when connections exceed idle timeout (data-driven)
 /// - Processes all idle connections per cycle (early termination optimization)
 ///
-/// Why Normal Priority (50)?
-/// - Important for resource management but not critical like memory
-/// - Can tolerate slight delays (5-minute timeout is very conservative)
-/// - Runs after high-priority tasks like key expiration
-///
 /// Performance Characteristics:
 /// - Typical execution: 5-10 microseconds (no idle connections)
 /// - With idle connections: 50-100 microseconds (socket closure overhead)
@@ -55,22 +50,14 @@ public class IdleConnectionCleanupTask : BackgroundTaskBase
 
     /// <summary>
     /// Gets the delay until next idle connection check.
-    ///
-    /// Hybrid Scheduling:
-    /// - Returns 0 if connections are already idle (immediate work)
-    /// - Returns time until next connection becomes idle (data-driven)
-    /// - Returns interval time as fallback
-    ///
-    /// This overrides the base interval-based scheduling with a more intelligent
-    /// data-driven approach that wakes up exactly when connections become idle.
     /// </summary>
     public override int GetNextRunDelay()
     {
         // Ask connection manager when the next connection becomes idle
-        int idleDelay = _connectionManager.GetNextTimeout();
+        var idleDelay = _connectionManager.GetNextTimeout();
 
         // Use the shorter delay (data-driven vs interval-based)
-        int intervalDelay = base.GetNextRunDelay();
+        var intervalDelay = base.GetNextRunDelay();
 
         return Math.Min(idleDelay, intervalDelay);
     }

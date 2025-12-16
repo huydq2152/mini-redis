@@ -16,13 +16,6 @@ namespace MyRedis.Infrastructure.Background;
 /// - Strategy: Each task implements IBackgroundTask interface
 /// - Coordinator: Orchestrates execution without knowing task specifics
 ///
-/// Benefits Over Previous Implementation:
-/// 1. Open/Closed Principle: Add new tasks without modifying this class
-/// 2. Single Responsibility: Only coordinates tasks, doesn't implement them
-/// 3. Dependency Inversion: Depends on IBackgroundTask abstraction
-/// 4. Testability: Easy to mock and test individual tasks
-/// 5. Extensibility: New tasks (metrics, persistence, clustering) just register
-///
 /// Integration with Event Loop:
 /// The event loop calls:
 /// 1. GetNextTimeout() - How long can we sleep in Socket.Select()?
@@ -33,7 +26,6 @@ namespace MyRedis.Infrastructure.Background;
 /// Task Execution Order:
 /// - Tasks are executed in priority order (highest first)
 /// - When multiple tasks are due, higher priority tasks run first
-/// - Example: KeyExpiration (100) runs before IdleConnectionCleanup (50)
 ///
 /// Time Budgeting (Optional):
 /// - If enabled, limits total background work per iteration
@@ -48,19 +40,6 @@ namespace MyRedis.Infrastructure.Background;
 /// - Minimal overhead when no tasks are due (~1 microsecond)
 ///
 /// Thread Safety: Not thread-safe. Assumes single-threaded event loop execution.
-///
-/// Example Usage:
-/// <code>
-/// var manager = new BackgroundTaskManager();
-/// manager.Register(new ExpirationTask(dataStore, expirationService));
-/// manager.Register(new IdleConnectionCleanupTask(connectionManager, networkServer));
-/// manager.Register(new MetricsCollectionTask(metricsService));
-///
-/// // In event loop:
-/// int timeout = manager.GetNextTimeout();
-/// Socket.Select(readList, null, null, timeout * 1000);
-/// manager.ProcessBackgroundTasks();
-/// </code>
 /// </summary>
 public class BackgroundTaskManager
 {
@@ -68,7 +47,7 @@ public class BackgroundTaskManager
     /// Registry of all background tasks.
     /// Tasks are stored in registration order, but executed in priority order.
     /// </summary>
-    private readonly List<IBackgroundTask> _tasks = new List<IBackgroundTask>();
+    private readonly List<IBackgroundTask> _tasks = new();
 
     /// <summary>
     /// Maximum time budget for background work per event loop iteration (microseconds).
@@ -83,7 +62,7 @@ public class BackgroundTaskManager
     /// When to enable:
     /// - High connection count with frequent background work
     /// - Strict latency requirements (e.g., &lt; 1ms P99)
-    /// - You observe background tasks blocking command processing
+    /// - Observe background tasks blocking command processing
     ///
     /// Note: If budget is exceeded, lower priority tasks may be skipped.
     /// Critical tasks (high priority) should always complete within budget.
@@ -99,12 +78,6 @@ public class BackgroundTaskManager
     /// This method enables the Open/Closed Principle:
     /// - Open for extension: New tasks can be registered without modifying this class
     /// - Closed for modification: No need to change BackgroundTaskManager code
-    ///
-    /// Example:
-    /// <code>
-    /// manager.Register(new ExpirationTask(dataStore, expirationService));
-    /// manager.Register(new MetricsCollectionTask(metricsService));
-    /// </code>
     ///
     /// Performance: O(1) - just adds to list
     /// </summary>
@@ -158,12 +131,12 @@ public class BackgroundTaskManager
         if (_tasks.Count == 0)
             return 10000; // 10 seconds
 
-        int minTimeout = int.MaxValue;
+        var minTimeout = int.MaxValue;
 
         // Ask each task when it needs to run next
         foreach (var task in _tasks)
         {
-            int taskTimeout = task.GetNextRunDelay();
+            var taskTimeout = task.GetNextRunDelay();
             if (taskTimeout < minTimeout)
                 minTimeout = taskTimeout;
         }
@@ -175,14 +148,8 @@ public class BackgroundTaskManager
     /// <summary>
     /// Processes all background tasks that are due to run.
     ///
-    /// Execution Strategy:
-    /// 1. Find all tasks that are due (GetNextRunDelay() returns 0)
-    /// 2. Sort by priority (highest first)
-    /// 3. Execute each task in priority order
-    /// 4. Stop if time budget is exceeded (if enabled)
-    ///
     /// Priority Ordering:
-    /// - Ensures critical tasks (memory management) run before metrics
+    /// - Ensures critical tasks (memory management) run before non-critical task (metrics)
     /// - Provides predictable execution order
     /// - Allows graceful degradation under load (low priority tasks skipped)
     ///
@@ -202,7 +169,11 @@ public class BackgroundTaskManager
     /// - Alternative: Keep tasks in priority queue
     /// - Trade-off: Sorting is cheap for small N (2-10 tasks)
     /// - Benefit: Simpler code, easier to understand
-    /// - If you have 50+ tasks, consider PriorityQueue&lt;IBackgroundTask, int&gt;
+    /// 
+    /// If there are 50+ tasks, consider use PriorityQueue for avoid:
+    /// - TimeBudgetMicros = 0, event loop be blocked after all task completed
+    /// - TimeBudgetMicros != 0, server run task until reach to TimeBudgetMicros, low priority task can be never run
+    /// - Overhead of management list (GC Pressure): allocation new list, iterate through list, sort list
     /// </summary>
     public void ProcessBackgroundTasks()
     {
@@ -228,7 +199,7 @@ public class BackgroundTaskManager
         dueTasks.Sort((a, b) => b.Priority.CompareTo(a.Priority));
 
         // Time budget tracking (if enabled)
-        long startTime = TimeBudgetMicros > 0 ? GetMicroseconds() : 0;
+        var startTime = TimeBudgetMicros > 0 ? GetMicroseconds() : 0;
 
         // Execute tasks in priority order
         foreach (var task in dueTasks)
@@ -236,7 +207,7 @@ public class BackgroundTaskManager
             // Check time budget (if enabled)
             if (TimeBudgetMicros > 0)
             {
-                long elapsed = GetMicroseconds() - startTime;
+                var elapsed = GetMicroseconds() - startTime;
                 if (elapsed >= TimeBudgetMicros)
                 {
                     // Budget exceeded - skip remaining tasks
@@ -263,15 +234,15 @@ public class BackgroundTaskManager
     /// Uses Stopwatch.GetTimestamp() for high-resolution timing:
     /// - Sub-microsecond resolution on most platforms
     /// - Monotonic clock (doesn't go backwards)
-    /// - Perfect for measuring small time intervals
+    /// - Perfect for measuring small-time intervals
     ///
     /// Note: This is more expensive than Environment.TickCount64
     /// (which is millisecond resolution), but necessary for microsecond budgeting.
     /// </summary>
     private long GetMicroseconds()
     {
-        long timestamp = global::System.Diagnostics.Stopwatch.GetTimestamp();
-        long frequency = global::System.Diagnostics.Stopwatch.Frequency;
+        var timestamp = global::System.Diagnostics.Stopwatch.GetTimestamp();
+        var frequency = global::System.Diagnostics.Stopwatch.Frequency;
         return (timestamp * 1_000_000) / frequency;
     }
 }

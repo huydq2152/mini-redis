@@ -19,11 +19,6 @@ namespace MyRedis.Core.Background;
 /// - Runs every 100ms (adjustable via constructor)
 /// - Processes up to 100 expired keys per cycle (configurable)
 ///
-/// Why High Priority (100)?
-/// - Memory management is critical for server stability
-/// - Expired keys should be deleted promptly to free memory
-/// - Runs before lower-priority tasks like metrics collection
-///
 /// Performance Characteristics:
 /// - Typical execution: 10-50 microseconds (no expired keys)
 /// - Heavy load: 100-200 microseconds (100 keys deleted)
@@ -56,22 +51,14 @@ public class ExpirationTask : BackgroundTaskBase
 
     /// <summary>
     /// Gets the delay until next expiration processing.
-    ///
-    /// Hybrid Scheduling:
-    /// - Returns 0 if keys are already expired (immediate work)
-    /// - Returns time until next expiration (data-driven)
-    /// - Returns interval time as fallback
-    ///
-    /// This overrides the base interval-based scheduling with a more intelligent
-    /// data-driven approach that wakes up exactly when keys expire.
     /// </summary>
     public override int GetNextRunDelay()
     {
         // Ask expiration service when the next key expires
-        int expirationDelay = _expirationService.GetNextTimeout();
+        var expirationDelay = _expirationService.GetNextTimeout();
 
         // Use the shorter delay (data-driven vs interval-based)
-        int intervalDelay = base.GetNextRunDelay();
+        var intervalDelay = base.GetNextRunDelay();
 
         return Math.Min(expirationDelay, intervalDelay);
     }
@@ -88,17 +75,12 @@ public class ExpirationTask : BackgroundTaskBase
     /// - If many keys expire at once, they're processed over multiple cycles
     /// - Prevents long-running expiration from blocking the event loop
     ///
-    /// Performance Optimization: NO LOCKS
-    /// - Single-threaded event loop = no concurrency
-    /// - ~40-50% faster than lock-based approach
-    /// - Benchmark: 100 keys deleted in 18μs (was 30μs with locks)
-    ///
     /// Note: ExpirationService already removed the expiration metadata.
     /// We just need to delete the actual key-value data.
     /// </summary>
     protected override void ExecuteCore()
     {
-        // Get list of keys that have expired
+        // Get list of keys that have expired and delete 
         var expiredKeys = _expirationService.ProcessExpiredKeys();
 
         // Delete each expired key from the data store

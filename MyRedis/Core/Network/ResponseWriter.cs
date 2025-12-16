@@ -52,21 +52,12 @@ public enum ResponseType : byte
 /// - Zero-Copy: Uses Span<byte> for direct memory access
 /// - Stack-based: BinaryPrimitives writes directly to buffer spans (no ToArray())
 ///
-/// Performance Impact (10K requests/sec):
-/// - Old approach (List<byte> + ToArray()): 10K allocations/sec = GC pressure
-/// - New approach (IBufferWriter): 0 allocations = no GC pauses
-///
 /// Related: See IResponseWriter interface for documentation of each response type.
 /// </summary>
 public static class ResponseWriter
 {
     /// <summary>
     /// Writes a 32-bit integer in little-endian format directly to the buffer writer.
-    ///
-    /// Zero-Allocation Strategy:
-    /// 1. GetSpan(4) reserves 4 bytes in the writer's internal buffer
-    /// 2. BinaryPrimitives.WriteInt32LittleEndian writes directly to that span
-    /// 3. Advance(4) commits the write (no copying, no allocation)
     ///
     /// Little-endian means the least significant byte comes first.
     /// Example: 300 (0x0000012C) becomes [2C 01 00 00] in memory.
@@ -79,20 +70,17 @@ public static class ResponseWriter
     private static void WriteInt32(IBufferWriter<byte> writer, int value)
     {
         // Get a span of at least 4 bytes from the writer's buffer
-        Span<byte> span = writer.GetSpan(4);
+        var span = writer.GetSpan(4);
 
         // Write the integer directly to the buffer (zero-copy)
         BinaryPrimitives.WriteInt32LittleEndian(span, value);
 
-        // Commit the write (advance the write position by 4 bytes)
+        // Commit the written (advance the write position by 4 bytes)
         writer.Advance(4);
     }
 
     /// <summary>
     /// Writes a 64-bit integer in little-endian format directly to the buffer writer.
-    ///
-    /// Zero-Allocation Strategy:
-    /// Same as WriteInt32, but for 8 bytes instead of 4.
     ///
     /// Used for Type 3 (Int) responses.
     /// 64-bit integers provide large enough range for most use cases:
@@ -103,12 +91,12 @@ public static class ResponseWriter
     private static void WriteInt64(IBufferWriter<byte> writer, long value)
     {
         // Get a span of at least 8 bytes from the writer's buffer
-        Span<byte> span = writer.GetSpan(8);
+        var span = writer.GetSpan(8);
 
         // Write the long integer directly to the buffer (zero-copy)
         BinaryPrimitives.WriteInt64LittleEndian(span, value);
 
-        // Commit the write (advance the write position by 8 bytes)
+        // Commit the written (advance the write position by 8 bytes)
         writer.Advance(8);
     }
 
@@ -124,12 +112,12 @@ public static class ResponseWriter
     public static void WriteNil(IBufferWriter<byte> writer)
     {
         // Get 1 byte from the writer's buffer
-        Span<byte> span = writer.GetSpan(1);
+        var span = writer.GetSpan(1);
 
         // Write the type byte directly
         span[0] = (byte)ResponseType.Nil;
 
-        // Commit the write
+        // Commit the written
         writer.Advance(1);
     }
 
@@ -137,11 +125,6 @@ public static class ResponseWriter
     /// Writes a string response to the buffer.
     ///
     /// Format: [Type 2][4-byte length][UTF-8 string bytes]
-    ///
-    /// Zero-Allocation Strategy:
-    /// 1. GetByteCount() calculates byte length without allocation
-    /// 2. GetSpan() reserves exact space needed
-    /// 3. GetBytes() encodes directly into the span (no intermediate array)
     ///
     /// The length is the byte count, not character count.
     /// This matters for multi-byte UTF-8 characters.
@@ -155,18 +138,18 @@ public static class ResponseWriter
     public static void WriteString(IBufferWriter<byte> writer, string value)
     {
         // Step 1: Write type byte
-        Span<byte> typeSpan = writer.GetSpan(1);
+        var typeSpan = writer.GetSpan(1);
         typeSpan[0] = (byte)ResponseType.Str;
         writer.Advance(1);
 
         // Step 2: Calculate UTF-8 byte count without allocating
-        int byteCount = Encoding.UTF8.GetByteCount(value);
+        var byteCount = Encoding.UTF8.GetByteCount(value);
 
         // Step 3: Write length
         WriteInt32(writer, byteCount);
 
         // Step 4: Write string content directly into buffer (zero-copy)
-        Span<byte> strSpan = writer.GetSpan(byteCount);
+        var strSpan = writer.GetSpan(byteCount);
         Encoding.UTF8.GetBytes(value, strSpan);
         writer.Advance(byteCount);
     }
@@ -176,8 +159,6 @@ public static class ResponseWriter
     ///
     /// Format: [Type 3][8-byte int64 little-endian]
     /// Total size: 9 bytes (1 + 8)
-    ///
-    /// Zero-Allocation: Single GetSpan(9) for type + value, no intermediate allocations.
     ///
     /// Used for numeric responses like:
     /// - DEL command: number of keys deleted
@@ -197,7 +178,7 @@ public static class ResponseWriter
         // Write the 8-byte integer value directly
         BinaryPrimitives.WriteInt64LittleEndian(span.Slice(1), value);
 
-        // Commit the write
+        // Commit the written
         writer.Advance(9);
     }
 
@@ -206,22 +187,12 @@ public static class ResponseWriter
     ///
     /// Format: [Type 1][4-byte code][4-byte message length][UTF-8 message]
     ///
-    /// Zero-Allocation: Same strategy as WriteString - calculate byte count, then encode directly.
-    ///
-    /// Error codes (currently not heavily used, always 1):
-    /// - 1: General command error
-    ///
-    /// Common error messages:
-    /// - "ERR wrong number of arguments"
-    /// - "WRONGTYPE Operation against a key holding the wrong kind of value"
-    /// - "Unknown cmd"
-    ///
     /// The client should display the message to help debug the issue.
     /// </summary>
     public static void WriteError(IBufferWriter<byte> writer, int code, string message)
     {
         // Step 1: Write type byte
-        Span<byte> typeSpan = writer.GetSpan(1);
+        var typeSpan = writer.GetSpan(1);
         typeSpan[0] = (byte)ResponseType.Err;
         writer.Advance(1);
 
@@ -229,13 +200,13 @@ public static class ResponseWriter
         WriteInt32(writer, code);
 
         // Step 3: Calculate message byte count without allocating
-        int msgByteCount = Encoding.UTF8.GetByteCount(message);
+        var msgByteCount = Encoding.UTF8.GetByteCount(message);
 
         // Step 4: Write message length
         WriteInt32(writer, msgByteCount);
 
         // Step 5: Write message content directly into buffer (zero-copy)
-        Span<byte> msgSpan = writer.GetSpan(msgByteCount);
+        var msgSpan = writer.GetSpan(msgByteCount);
         Encoding.UTF8.GetBytes(message, msgSpan);
         writer.Advance(msgByteCount);
     }
@@ -245,8 +216,6 @@ public static class ResponseWriter
     ///
     /// Format: [Type 4][4-byte count]
     ///
-    /// Zero-Allocation: Simple type byte + count write, no allocations.
-    ///
     /// This only writes the header. The caller must then write exactly 'count'
     /// elements using other Write methods (WriteString, WriteInt, etc.).
     ///
@@ -254,18 +223,12 @@ public static class ResponseWriter
     /// - KEYS: array of key name strings
     /// - ZRANGE: array of member name strings
     ///
-    /// Example for ["apple", "banana", "cherry"]:
-    /// 1. WriteArrayHeader(writer, 3)
-    /// 2. WriteString(writer, "apple")
-    /// 3. WriteString(writer, "banana")
-    /// 4. WriteString(writer, "cherry")
-    ///
     /// Arrays can be nested (an element can itself be an array).
     /// </summary>
     public static void WriteArrayHeader(IBufferWriter<byte> writer, int count)
     {
         // Write type byte
-        Span<byte> typeSpan = writer.GetSpan(1);
+        var typeSpan = writer.GetSpan(1);
         typeSpan[0] = (byte)ResponseType.Arr;
         writer.Advance(1);
 

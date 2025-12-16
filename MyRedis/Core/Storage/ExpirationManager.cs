@@ -189,7 +189,7 @@ public class ExpirationManager
             return null;
 
         // Calculate time remaining
-        long ttl = expireAt - TimeHelper.GetNow();
+        var ttl = expireAt - TimeHelper.GetNow();
 
         // Return at least 0 (negative values mean already expired)
         return ttl > 0 ? ttl : 0;

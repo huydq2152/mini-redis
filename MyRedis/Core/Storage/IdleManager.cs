@@ -37,7 +37,7 @@ public class IdleManager
     // Doubly-linked list ordered by last activity time
     // Head = oldest (least recently active)
     // Tail = newest (most recently active)
-    private readonly LinkedList<Connection> _list = new LinkedList<Connection>();
+    private readonly LinkedList<Connection> _list = new();
 
     // Idle timeout in milliseconds (5 minutes)
     // Connections inactive for longer than this will be closed
@@ -47,14 +47,6 @@ public class IdleManager
     /// Adds a new connection to the idle tracking list.
     ///
     /// Called by NetworkServer immediately after accepting a new client connection.
-    ///
-    /// Operation:
-    /// 1. Set the connection's LastActive timestamp to now
-    /// 2. Add to the END of the list (tail = most recent)
-    /// 3. Store the LinkedListNode in the connection (intrusive pattern)
-    ///
-    /// The intrusive pattern (storing the node in the connection) enables
-    /// O(1) removal later without searching through the list.
     ///
     /// Performance: O(1)
     /// </summary>
@@ -74,20 +66,10 @@ public class IdleManager
     /// Called by NetworkServer every time data is received from a client.
     /// This "resets" the idle timer for this connection.
     ///
-    /// Operation:
-    /// 1. Update LastActive timestamp to now
-    /// 2. Remove connection from its current position in the list
-    /// 3. Add it back at the END (tail = most recent)
-    ///
     /// Why move to end?
     /// - Maintains the invariant that the list is ordered by activity time
     /// - Head always contains the least recently active connection
     /// - Enables efficient idle detection (scan from head, stop at first non-idle)
-    ///
-    /// Intrusive List Advantage:
-    /// - We have direct access to the node (conn.Node)
-    /// - LinkedList.Remove(node) is O(1) - just update prev/next pointers
-    /// - No need to search the list
     ///
     /// Performance: O(1)
     /// </summary>
@@ -115,14 +97,6 @@ public class IdleManager
     /// - Connection error occurs
     /// - Connection is being closed due to idle timeout
     ///
-    /// Operation:
-    /// 1. Remove the node from the linked list
-    /// 2. Clear the node reference in the connection
-    ///
-    /// Intrusive List Advantage:
-    /// - Direct node access enables O(1) removal
-    /// - No need to search through the list to find the connection
-    ///
     /// Performance: O(1)
     /// </summary>
     public void Remove(Connection conn)
@@ -149,12 +123,6 @@ public class IdleManager
     /// 3. If idle: add to result and remove from list
     /// 4. If not idle: STOP (all subsequent connections are newer)
     ///
-    /// Early Termination Optimization:
-    /// - The list is ordered by activity time (oldest first)
-    /// - As soon as we find a non-idle connection, we can stop
-    /// - All connections after it are guaranteed to be even newer
-    /// - This makes the typical case very fast (usually 0-2 idle connections)
-    ///
     /// Removal During Iteration:
     /// - We remove idle connections from the list as we find them
     /// - This prevents them from being checked again
@@ -169,12 +137,12 @@ public class IdleManager
     /// Performance: O(k) where k = number of idle connections
     /// Typically k is very small (0-5), making this effectively O(1)
     ///
-    /// Returns: List of connections exceeding the idle timeout (may be empty)
+    /// Returns: List of connections exceeding the idle timeout (perhaps empty)
     /// </summary>
     public List<Connection> GetIdleConnections()
     {
         var result = new List<Connection>();
-        long now = Environment.TickCount64;
+        var now = Environment.TickCount64;
 
         // Start from the HEAD (oldest connections first)
         var node = _list.First;
@@ -183,7 +151,7 @@ public class IdleManager
             var conn = node.Value;
 
             // Calculate how long this connection has been idle
-            long idleTime = now - conn.LastActive;
+            var idleTime = now - conn.LastActive;
 
             if (idleTime > IdleTimeoutMs)
             {
@@ -194,7 +162,7 @@ public class IdleManager
                 var next = node.Next;
 
                 // Remove from the list (connection will be closed by caller)
-                _list.Remove(node); // O(1)
+                _list.Remove(node);
 
                 // Move to the next connection
                 node = next;
@@ -242,10 +210,10 @@ public class IdleManager
         if (_list.First == null)
             return 10000; // 10 seconds
 
-        long now = Environment.TickCount64;
+        var now = Environment.TickCount64;
 
         // Calculate when the oldest connection will become idle
-        long deadline = _list.First.Value.LastActive + IdleTimeoutMs;
+        var deadline = _list.First.Value.LastActive + IdleTimeoutMs;
 
         // If already past deadline, wake up immediately
         if (deadline <= now)
