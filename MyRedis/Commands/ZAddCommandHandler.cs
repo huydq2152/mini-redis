@@ -1,5 +1,7 @@
 using MyRedis.Abstractions;
+using MyRedis.Abstractions.Commands;
 using MyRedis.Storage.DataStructures;
+using MyRedis.Storage.Models;
 
 namespace MyRedis.Commands;
 
@@ -49,7 +51,7 @@ public class ZAddCommandHandler : BaseCommandHandler
         {
             // Key doesn't exist - create a new sorted set
             value = new SortedSet();
-            context.DataStore.SetWithType(key, value, Storage.RedisType.SortedSet);
+            context.DataStore.SetWithType(key, value, RedisType.SortedSet);
         }
 
         // Verify the value is actually a sorted set (type safety)

@@ -1,4 +1,6 @@
 using MyRedis.Abstractions;
+using MyRedis.Abstractions.Commands;
+using MyRedis.Storage.Models;
 
 namespace MyRedis.Commands;
 
@@ -51,15 +53,15 @@ public class ExpireCommandHandler : BaseCommandHandler
             long expireAt = Environment.TickCount64 + (seconds * 1000);
 
             // Determine the type of the existing value
-            Storage.RedisType type;
+            RedisType type;
             if (value is string)
-                type = Storage.RedisType.String;
+                type = RedisType.String;
             else if (value is Storage.DataStructures.SortedSet)
-                type = Storage.RedisType.SortedSet;
+                type = RedisType.SortedSet;
             else if (value is long)
-                type = Storage.RedisType.Integer;
+                type = RedisType.Integer;
             else if (value is double)
-                type = Storage.RedisType.Double;
+                type = RedisType.Double;
             else
                 throw new InvalidOperationException($"Unsupported value type: {value.GetType()}");
 

@@ -1,26 +1,9 @@
 ﻿using MyRedis.Infrastructure;
-using MyRedis.System.BackgroundTask;
+using MyRedis.Infrastructure.Server;
+using MyRedis.System.Tasks;
 
 // ============================================================================
 // MyRedis Server - Main Entry Point
-// ============================================================================
-// A Redis server implementation in C# following clean architecture principles.
-//
-// Key Features:
-// - Binary protocol parser for Redis-like commands
-// - Event loop using Socket.Select() (similar to Redis)
-// - Command handler pattern with dependency injection
-// - Background task processing (TTL expiration, idle connections)
-// - Advanced data structures (Sorted Sets with AVL trees)
-//
-// Architecture:
-// - RedisServerOrchestrator: Main event loop coordinator
-// - NetworkServer: TCP socket handling and I/O
-// - CommandProcessor: Protocol parsing and command routing
-// - BackgroundTaskManager: Expiration and idle connection cleanup
-//
-// To test the server, run the client:
-//   dotnet run --project MyRedis.Client/MyRedis.Client.csproj
 // ============================================================================
 
 Console.WriteLine("Starting MyRedis Server...");
@@ -39,7 +22,7 @@ try
     var cancelled = false;
 
     // Register a handler for Ctrl+C (SIGINT)
-    // This is the standard way to gracefully shutdown a server application
+    // This is the standard way to gracefully shut down a server application
     Console.CancelKeyPress += (_, e) =>
     {
         // Only handle the first Ctrl+C press
@@ -61,19 +44,12 @@ try
     };
 
     // Create and configure the server with all dependencies
-    // RedisServerFactory uses dependency injection to wire up all components:
-    // - Core services (data store, command registry, expiration, connections)
-    // - Command handlers (GET, SET, ZADD, ZRANGE, EXPIRE, etc.)
-    // - Infrastructure (network server, processor, background tasks)
+    // RedisServerFactory uses dependency injection to wire up all components
     // Returns both the server orchestrator and background task system for shutdown control
     (var server, backgroundTaskSystem) = RedisServerFactory.CreateServer();
 
     // Start the main event loop
     // This will run until the cancellation token is triggered (Ctrl+C)
-    // The event loop:
-    // 1. Waits for network events using Socket.Select()
-    // 2. Processes incoming commands
-    // 3. Runs background tasks (expiration, idle cleanup)
     await server.RunAsync(cts.Token);
 }
 catch (OperationCanceledException)
@@ -105,17 +81,12 @@ finally
             // System timeout is global - whichever completes first
             bool cleanShutdown = await backgroundTaskSystem.ShutdownAsync(TimeSpan.FromSeconds(10));
 
-            if (cleanShutdown)
-            {
-                Console.WriteLine("[Shutdown] All background tasks completed successfully");
-            }
-            else
-            {
+            Console.WriteLine(cleanShutdown
+                ? "[Shutdown] All background tasks completed successfully"
                 // Timeout occurred - some tasks were forcibly stopped
                 // Acceptable for LazyFree (just memory cleanup)
                 // Warning for Persistence (potential data loss in future)
-                Console.WriteLine("[Shutdown] Warning: Some background tasks timed out (forced shutdown)");
-            }
+                : "[Shutdown] Warning: Some background tasks timed out (forced shutdown)");
         }
         catch (Exception ex)
         {
