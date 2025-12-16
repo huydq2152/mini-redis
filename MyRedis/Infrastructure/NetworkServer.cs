@@ -72,6 +72,60 @@ namespace MyRedis.Infrastructure;
 /// - Reactor: Socket.Select() waits for events
 /// - Dispatcher: ProcessNetworkEvents() dispatches to handlers
 /// - Handlers: HandleAccept(), HandleRead(), HandleDisconnect()
+///
+///
+/// TODO: Socket.Select() Performance Analysis and Scaling Limitations
+/// 
+/// Current Implementation: Socket.Select() with O(N) per-call overhead
+/// ═══════════════════════════════════════════════════════════════
+/// 
+/// Performance Characteristics:
+/// - Complexity: O(3N) per call (marshal → syscall → unmarshal)
+/// - Platform limits: Windows=64 FDs default, Linux=1024 FDs default
+/// - Memory: Full fd_set copied each call (GC pressure)
+/// - Scalability: Degrades significantly beyond 500-1000 connections
+/// 
+/// The C10K Problem:
+/// At 10,000 connections × 10,000 ops/sec = 300M operations/sec just for Select!
+/// Windows chunks into 64-socket groups (multiple syscalls needed)
+/// Linux select() still O(N) in kernel (checks ALL FDs even if none ready)
+/// 
+/// Migration Options (when connection count approaches 500+):
+/// 
+/// Option A: SocketAsyncEventArgs (SAEA) - Keep Single-Thread Model
+/// ┌─────────────────────────────────────────────────────────────────┐
+/// │ Pros: Uses IOCP/epoll (O(1)), poolable, preserves lock-free     │
+/// │ Cons: Callback-based, complex state management                  │
+/// │ Effort: ~1-2 weeks                                              │
+/// │ Pattern: Keep current single-threaded command processing        │
+/// └─────────────────────────────────────────────────────────────────┘
+/// 
+/// Option B: async/await Throughout - Modern .NET Approach
+/// ┌─────────────────────────────────────────────────────────────────┐
+/// │ Pros: Clean code, uses IOCP/epoll internally, ValueTask support │
+/// │ Cons: Breaks single-thread model, needs locks for shared state  │
+/// │ Effort: ~1 week + extensive testing                             │
+/// │ Pattern: Async methods, ConfigureAwait(false) everywhere        │
+/// └─────────────────────────────────────────────────────────────────┘
+/// 
+/// Option C: I/O Thread + Event Queue - Redis 6.0 Style
+/// ┌─────────────────────────────────────────────────────────────────┐
+/// │ Pros: Best of both (O(1) I/O + single-thread commands)         │
+/// │ Cons: Most complex, dedicated I/O thread management             │
+/// │ Effort: ~2-3 weeks                                              │
+/// │ Pattern: Dedicated I/O thread → lock-free queue → main thread   │
+/// └─────────────────────────────────────────────────────────────────┘
+/// 
+/// Migration Trigger: When connection count consistently exceeds 500
+/// 
+/// Recommended: Start with Option A (SAEA) as it preserves the current
+/// single-threaded architecture while providing O(1) I/O performance.
+/// This maintains the simplicity benefits (no locks, no race conditions)
+/// while scaling to 10K+ connections.
+/// 
+/// Current Status: Select-based implementation is sufficient for
+/// development/testing and moderate loads (< 500 concurrent connections)
+/// 
 /// </summary>
 public class NetworkServer
 {
