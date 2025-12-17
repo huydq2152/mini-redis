@@ -20,12 +20,6 @@ namespace MyRedis.Infrastructure.Commands;
 /// MyRedis uses a simplified binary protocol:
 /// [4-byte count][4-byte len][string][4-byte len][string]...
 ///
-/// Example: SET key value
-/// - Count: 3 (3 arguments)
-/// - Len: 3, Data: "SET"
-/// - Len: 3, Data: "key"
-/// - Len: 5, Data: "value"
-///
 /// Integration with Event Loop:
 /// 1. NetworkServer.ProcessNetworkEvents() reads data into connection buffers
 /// 2. RedisServerOrchestrator calls ProcessConnectionDataAsync() for each connection
@@ -41,17 +35,13 @@ namespace MyRedis.Infrastructure.Commands;
 /// - This dramatically improves throughput (batch processing)
 ///
 /// Fairness & Starvation Prevention:
-/// To prevent Head-of-Line Blocking, we limit commands processed per iteration:
+/// To prevent Head-of-Line Blocking (a "greedy" client sending too much command pipelined)
+/// Need limit commands processed per iteration:
 /// - MAX_COMMANDS_PER_LOOP = 16 commands per connection per loop
 /// - After 16 commands, yield to other connections (even if more buffered data)
 /// - Return (processed=16, hasMore=true) to signal pending work
 /// - Orchestrator adds connection to _resumeList for next iteration
 /// - This ensures round-robin fairness: all clients get timeslices
-///
-/// Why This Matters:
-/// Without limiting, a "greedy" client sending 10,000 pipelined commands would
-/// monopolize the server, causing seconds of latency for other clients.
-/// With limiting, max delay = (num_clients × 16 commands × avg_command_time).
 ///
 /// Command Execution Flow:
 /// 1. Parse command from buffer using ProtocolParser
@@ -91,40 +81,10 @@ public class CommandProcessor
     /// - Redis uses similar limits (processInputBuffer processes in chunks)
     /// - Small enough to ensure fairness (low latency for other clients)
     /// - Large enough to amortize event loop overhead (efficient pipelining)
-    /// - Balances throughput vs latency
-    ///
-    /// Example Scenarios:
-    ///
-    /// Scenario 1: Small Request
-    /// - Client sends 5 pipelined commands
-    /// - Processes all 5 in one iteration (count < 16)
-    /// - Returns (5, hasMore=false) - no pending work
-    ///
-    /// Scenario 2: Large Batch
-    /// - Client A sends 10,000 pipelined commands
-    /// - Iteration 1: Process 16, return (16, hasMore=true)
-    /// - Other clients get their turn (fairness)
-    /// - Iteration 2: Process next 16 from Client A
-    /// - Repeat until all processed
-    ///
-    /// Scenario 3: Mixed Load
-    /// - Client A: 1000 commands buffered
-    /// - Client B: 1 command buffered
-    /// - Round 1: A processes 16, B processes 1
-    /// - Round 2: A processes 16, B done
-    /// - Client B latency: ~2 rounds instead of waiting for all 1000 of A's commands
-    ///
-    /// Performance Impact:
-    /// - Latency P99: Dramatically reduced (no starvation)
-    /// - Throughput: Minimal impact (~1% overhead from extra event loops)
-    /// - Fairness: Guaranteed progress for all clients
-    ///
-    /// Alternative Values:
-    /// - Too small (e.g., 1): High event loop overhead, low throughput
-    /// - Too large (e.g., 1000): Defeats fairness, still causes starvation
-    /// - Just right (16): Balance of fairness and performance
+    /// - Balances low throughput vs latency (avoid starvation)
     /// </summary>
     private const int MaxCommandsPerLoop = 16;
+    
     // Registry that maps command names (GET, SET, etc.) to handler instances
     private readonly ICommandRegistry _commandRegistry;
 
@@ -139,15 +99,6 @@ public class CommandProcessor
 
     /// <summary>
     /// Creates a command processor with all required dependencies.
-    ///
-    /// Dependencies are injected to maintain loose coupling and testability.
-    /// All parameters are required (null check enforced).
-    ///
-    /// Why These Dependencies?
-    /// - CommandRegistry: Looks up handlers for command names (GET, SET, etc.)
-    /// - DataStore: Passed to handlers so they can read/write data
-    /// - ExpirationService: Passed to handlers that manage TTLs (EXPIRE, TTL, etc.)
-    /// - ResponseWriter: Passed to handlers so they can format responses
     /// </summary>
     public CommandProcessor(
         ICommandRegistry commandRegistry,
@@ -155,7 +106,6 @@ public class CommandProcessor
         IExpirationService expirationService,
         IResponseWriter responseWriter)
     {
-        // Validate all dependencies (fail-fast if misconfigured)
         _commandRegistry = commandRegistry ?? throw new ArgumentNullException(nameof(commandRegistry));
         _dataStore = dataStore ?? throw new ArgumentNullException(nameof(dataStore));
         _expirationService = expirationService ?? throw new ArgumentNullException(nameof(expirationService));
@@ -168,20 +118,6 @@ public class CommandProcessor
     /// This method is called by RedisServerOrchestrator after NetworkServer detects
     /// that a connection has received data or has pending buffered commands.
     ///
-    /// Processing Flow:
-    /// 1. Try to parse one command from the buffer
-    /// 2. If successful:
-    ///    a. Execute the command (call handler)
-    ///    b. Flush response to client
-    ///    c. Remove parsed bytes from buffer
-    ///    d. Increment counter
-    ///    e. If counter < MAX_COMMANDS_PER_LOOP, repeat (handle pipelining)
-    ///    f. If counter >= MAX_COMMANDS_PER_LOOP, check for more data and yield
-    /// 3. If parsing fails:
-    ///    a. Partial command in buffer
-    ///    b. Wait for more data from client
-    ///    c. Exit loop and return (hasMore=false)
-    ///
     /// Fairness Implementation:
     /// After processing MAX_COMMANDS_PER_LOOP (16) commands:
     /// - Check if buffer still has data (BytesRead > 0)
@@ -193,29 +129,7 @@ public class CommandProcessor
     /// - Select() only wakes on NEW network data, not buffered data
     /// - Server would sleep even though buffer has commands to process
     /// - With hasMore=true, orchestrator adds to _resumeList (process next iteration)
-    ///
-    /// Pipelining Example:
-    /// Client sends: GET key1; GET key2; GET key3 (all in one TCP packet)
-    /// - Loop iteration 1: Parse and execute GET key1
-    /// - Loop iteration 2: Parse and execute GET key2
-    /// - Loop iteration 3: Parse and execute GET key3
-    /// - Loop iteration 4: No more complete commands, exit
-    /// - Returns (3, hasMore=false)
-    ///
-    /// Large Batch Example:
-    /// Client sends 100 pipelined commands:
-    /// - Iteration 1: Process 16, return (16, hasMore=true)
-    /// - Orchestrator adds to _resumeList
-    /// - Other clients get their turn (fairness!)
-    /// - Iteration 2: Process next 16, return (16, hasMore=true)
-    /// - ... repeat ...
-    /// - Iteration 7: Process last 4, return (4, hasMore=false)
-    ///
-    /// Buffer Management:
-    /// - connection.ReadBuffer: Contains raw bytes from client
-    /// - connection.BytesRead: How many valid bytes in buffer
-    /// - ShiftBuffer(consumed): Removes processed bytes, compacts remaining
-    ///
+    /// 
     /// Performance:
     /// - Zero-copy parsing: ProtocolParser reads directly from buffer
     /// - Immediate response: Flush after each command (low latency)
@@ -227,19 +141,19 @@ public class CommandProcessor
     public async Task<(int processed, bool hasMore)> ProcessConnectionDataAsync(Connection connection)
     {
         // Track how many commands we process (for metrics and logging)
-        int commandsProcessed = 0;
+        var commandsProcessed = 0;
 
         // Loop to handle pipelining: client may send multiple commands at once
         // Process up to MAX_COMMANDS_PER_LOOP, then yield for fairness
         while (true)
         {
-            // FAIRNESS CHECK: Have we processed our quota for this iteration?
+            // FAIRNESS CHECK: Have we processed quota for this iteration?
             if (commandsProcessed >= MaxCommandsPerLoop)
             {
-                // We've processed our fair share (16 commands)
+                // Processed fair share (16 commands)
                 // Check if there's likely more data to process
                 // (even a partial command indicates we should resume later)
-                bool hasMoreData = connection.BytesRead > 0;
+                var hasMoreData = connection.BytesRead > 0;
 
                 if (hasMoreData)
                 {
@@ -249,12 +163,10 @@ public class CommandProcessor
                     Console.WriteLine($"[Fairness] Yielding after {commandsProcessed} commands (buffer has {connection.BytesRead} bytes remaining)");
                     return (commandsProcessed, hasMore: true);
                 }
-                else
-                {
-                    // We've processed exactly 16 commands and buffer is empty
-                    // This is the normal case: buffer fully drained
-                    return (commandsProcessed, hasMore: false);
-                }
+
+                // Processed exactly 16 commands and buffer is empty
+                // This is the normal case: buffer fully drained
+                return (commandsProcessed, hasMore: false);
             }
 
             // Try to parse one command from the buffer
@@ -262,46 +174,49 @@ public class CommandProcessor
             // - true: Successfully parsed a command (cmd) and consumed bytes
             // - false: Not enough data for a complete command (need more from client)
             if (ProtocolParser.TryParse(connection.ReadBuffer, connection.BytesRead,
-                out var cmd, out int consumed))
+                out var cmd, out var consumed))
             {
                 // Successfully parsed one complete command
                 // cmd is a list of strings: ["GET", "key"] or ["SET", "key", "value"]
-                Console.WriteLine($"[Command] {string.Join(" ", cmd)}");
-
-                // CRITICAL: Check if previous command has unsent data (partial send)
-                // If so, we CANNOT process a new command yet - we must wait for the
-                // pending write to complete first to avoid corrupting the response stream
-                if (connection.WriteBufferOffset > 0 && connection.WriteBufferOffset < connection.WrittenCount)
+                if (cmd != null)
                 {
-                    // Previous command's response hasn't been fully sent yet
-                    // This should be rare (only happens with large responses or slow clients)
-                    // We MUST NOT execute the new command because:
-                    // 1. New response would corrupt the unsent portion of previous response
-                    // 2. Response order would be violated (pipelining requires in-order responses)
-                    //
-                    // Solution: Skip this command for now, it will be processed in the next
-                    // event loop iteration after the pending write completes
-                    Console.WriteLine($"[WARNING] Skipping command due to pending write: {string.Join(" ", cmd)}");
+                    Console.WriteLine($"[Command] {string.Join(" ", cmd)}");
 
-                    // Buffer has a complete command but we can't process it yet
-                    // Return hasMore=true so orchestrator resumes us when write completes
-                    return (commandsProcessed, hasMore: true);
+                    // Check if previous command has unsent data (partial send)
+                    // If so, we CANNOT process a new command yet - we must wait for the
+                    // pending write to complete first to avoid corrupting the response stream
+                    if (connection.WriteBufferOffset > 0 && connection.WriteBufferOffset < connection.WrittenCount)
+                    {
+                        // Previous command's response hasn't been fully sent yet
+                        // This should be rare (only happens with large responses or slow clients)
+                        // We MUST NOT execute the new command because:
+                        // 1. New response would corrupt the unsent portion of previous response
+                        // 2. Response order would be violated (pipelining requires in-order responses)
+                        //
+                        // Solution: Skip this command for now, it will be processed in the next
+                        // event loop iteration after the pending write completes
+                        Console.WriteLine($"[WARNING] Skipping command due to pending write: {string.Join(" ", cmd)}");
+
+                        // Buffer has a complete command, but we can't process it yet
+                        // Return hasMore=true so orchestrator resumes us when write completes
+                        return (commandsProcessed, hasMore: true);
+                    }
+
+                    // Reset write buffer BEFORE executing command
+                    // This ensures each command starts with a clean slate
+                    // Without this, previous error responses can corrupt new responses
+                    connection.ResetWriteBuffer();
+
+                    // Execute the command (call the appropriate handler)
+                    await ExecuteCommandAsync(connection, cmd);
                 }
-
-                // CRITICAL: Reset write buffer BEFORE executing command
-                // This ensures each command starts with a clean slate
-                // Without this, previous error responses can corrupt new responses
-                connection.ResetWriteBuffer();
-
-                // Execute the command (call the appropriate handler)
-                await ExecuteCommandAsync(connection, cmd);
 
                 // Send response immediately to the client
                 // This ensures low latency (don't buffer responses)
                 // Flush() returns:
                 // - true: All data sent (normal case for small responses)
                 // - false: Partial send, needs write monitoring (large responses or slow clients)
-                bool allSent = connection.Flush();
+                var allSent = connection.Flush();
 
                 // Remove processed bytes from the buffer
                 // This compacts the buffer so remaining data moves to the front
@@ -310,6 +225,14 @@ public class CommandProcessor
 
                 // Increment counter
                 commandsProcessed++;
+
+                // If partial send, yield immediately to allow write completion
+                if (!allSent)
+                {
+                    // Still have unsent data in write buffer
+                    // Orchestrator will resume us when write is ready
+                    return (commandsProcessed, hasMore: true);
+                }
             }
             else
             {
@@ -324,17 +247,6 @@ public class CommandProcessor
     /// <summary>
     /// Executes a single parsed command by routing it to the appropriate handler.
     ///
-    /// Execution Flow:
-    /// 1. Extract command name (first element, e.g., "GET", "SET")
-    /// 2. Look up handler in registry
-    /// 3. If handler found:
-    ///    a. Build command context (connection, data store, etc.)
-    ///    b. Extract arguments (everything after command name)
-    ///    c. Call handler.HandleAsync(context, args)
-    ///    d. Handler writes response to connection.Writer
-    /// 4. If handler not found:
-    ///    a. Write error response to client
-    ///
     /// Command Context:
     /// Handlers need access to multiple services to do their job:
     /// - Connection: To write responses
@@ -344,11 +256,6 @@ public class CommandProcessor
     ///
     /// We bundle all of these into ICommandContext so handlers have
     /// everything they need without constructor dependencies.
-    ///
-    /// Example Commands:
-    /// - GET key -> cmd = ["GET", "key"], args = ["key"]
-    /// - SET key value -> cmd = ["SET", "key", "value"], args = ["key", "value"]
-    /// - ZADD myset 1.0 member -> cmd = ["ZADD", "myset", "1.0", "member"], args = ["myset", "1.0", "member"]
     ///
     /// Error Cases:
     /// - Unknown command: Returns "-Unknown cmd\r\n" to client
@@ -364,7 +271,7 @@ public class CommandProcessor
 
         // Extract command name (first element) and convert to uppercase
         // Redis commands are case-insensitive: GET = get = Get
-        string commandName = cmd[0].ToUpper();
+        var commandName = cmd[0].ToUpper();
 
         // Look up the handler for this command name
         // Returns null if command doesn't exist
@@ -372,8 +279,6 @@ public class CommandProcessor
 
         if (handler != null)
         {
-            // Command exists, execute it
-
             // Build the command context with all dependencies the handler needs
             var context = new CommandContext(
                 connection,          // To write responses
@@ -383,7 +288,6 @@ public class CommandProcessor
             );
 
             // Extract arguments (everything after the command name)
-            // For "SET key value", args = ["key", "value"]
             var args = cmd.Skip(1).ToList();
 
             // Call the handler to execute the command

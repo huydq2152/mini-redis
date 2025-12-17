@@ -75,7 +75,7 @@ public sealed class CategoryWorker : IDisposable
         if (_disposed || _cts.IsCancellationRequested)
             return false;
 
-        bool submitted = _channel.Writer.TryWrite(task);
+        var submitted = _channel.Writer.TryWrite(task);
 
         if (submitted)
         {
@@ -161,7 +161,7 @@ public sealed class CategoryWorker : IDisposable
         catch (TimeoutException)
         {
             // Force cancellation if graceful shutdown timed out
-            _cts.Cancel();
+            await _cts.CancelAsync();
             UpdateHealth(WorkerHealth.Failed);
             return false;
         }

@@ -170,8 +170,6 @@ public class ExpirationManager
     /// <summary>
     /// Gets the remaining time-to-live for a key in milliseconds.
     ///
-    /// Used by the TTL command to show how long until a key expires.
-    ///
     /// Return values:
     /// - null: Key has no expiration (it's persistent)
     /// - Positive number: Milliseconds remaining until expiration
@@ -198,10 +196,10 @@ public class ExpirationManager
     /// <summary>
     /// Removes expiration for a key, making it persistent.
     ///
-    /// Called when:
-    /// - A key is deleted (DEL command)
-    /// - A key is set without expiration (SET command)
-    /// - PERSIST command (if implemented)
+    /// Common usage scenarios:
+    /// - DEL command: Remove expiration when manually deleting a key
+    /// - SET command: Clear expiration when overwriting a key value
+    /// - PERSIST command: Make a key permanent by removing its TTL
     ///
     /// Follow Lazy Update Strategy
     ///
@@ -279,6 +277,7 @@ public class ExpirationManager
     /// - If expiration time matches and expired: Valid expired key
     ///
     /// Performance: O(k log n) where k = number of entries processed (≤ 100)
+    /// Typically k is small (0-10 keys per iteration) making this very efficient.
     ///
     /// Returns: List of keys that have expired and should be deleted from the data store
     /// </summary>

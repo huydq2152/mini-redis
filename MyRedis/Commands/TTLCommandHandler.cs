@@ -45,7 +45,7 @@ public class TtlCommandHandler : BaseCommandHandler
         }
 
         // Get the remaining time to live for the key from expiration service
-        long? ttl = context.ExpirationService.GetTtl(key);
+        long? ttl = context.ExpirationService.GetTimeToLive(key);
         
         if (ttl == null)
         {

@@ -17,74 +17,28 @@ namespace MyRedis.System.Tasks;
 /// - BIO_LAZY_FREE (2): Free large objects - CPU intensive
 ///
 /// Each category gets dedicated resources to prevent cross-contamination.
-///
 /// 
 /// Coordinates multiple category workers, providing unified interface
 /// for background task submission and system-wide health monitoring.
 ///
 /// Thread-Safe: Yes (all public methods)
-///
-/// Usage:
-/// <code>
-/// var system = new BackgroundTaskSystem();
-///
-/// // Submit tasks to appropriate categories
-/// system.Submit(BackgroundTaskCategory.LazyFree, () => DestroyLargeObject(obj));
-/// system.Submit(BackgroundTaskCategory.Persistence, () => FsyncAOF());
-///
-/// // Health check
-/// var health = system.GetSystemHealth();
-///
-/// // Graceful shutdown
-/// await system.ShutdownAsync(TimeSpan.FromSeconds(10));
-/// </code>
+/// IDisposable: Yes (graceful shutdown)
 /// </summary>
 public sealed class BackgroundTaskSystem : IDisposable
 {
     private readonly Dictionary<BackgroundTaskCategory, CategoryWorker> _workers;
-    private readonly Dictionary<BackgroundTaskCategory, CategoryWorker.Options> _options;
     private volatile bool _disposed;
 
-    public BackgroundTaskSystem(Dictionary<BackgroundTaskCategory, CategoryWorker.Options>? categoryOptions = null)
+    public BackgroundTaskSystem()
     {
-        _options = categoryOptions ?? GetDefaultOptions();
+        var options = BackgroundTaskDefaults.GetBackgroundTaskCategories();
         _workers = new Dictionary<BackgroundTaskCategory, CategoryWorker>();
 
         // Initialize workers for each configured category
-        foreach (var category in _options.Keys)
+        foreach (var category in options.Keys)
         {
-            _workers[category] = new CategoryWorker(category, _options[category]);
+            _workers[category] = new CategoryWorker(category, options[category]);
         }
-    }
-
-    /// <summary>
-    /// Gets default configuration optimized for Redis-like workloads.
-    /// </summary>
-    private static Dictionary<BackgroundTaskCategory, CategoryWorker.Options> GetDefaultOptions()
-    {
-        return new Dictionary<BackgroundTaskCategory, CategoryWorker.Options>
-        {
-            [BackgroundTaskCategory.LazyFree] = new()
-            {
-                MaxQueueSize = 0, // Unbounded - we want to accept all free requests
-                ShutdownTimeoutMs = 10000 // Allow time for large objects
-            },
-            [BackgroundTaskCategory.Persistence] = new()
-            {
-                MaxQueueSize = 100, // Bounded - backpressure if disk too slow
-                ShutdownTimeoutMs = 30000 // Must complete for durability
-            },
-            [BackgroundTaskCategory.FileOps] = new()
-            {
-                MaxQueueSize = 1000,
-                ShutdownTimeoutMs = 5000
-            },
-            [BackgroundTaskCategory.Maintenance] = new()
-            {
-                MaxQueueSize = 100,
-                ShutdownTimeoutMs = 2000 // Low priority, can abort
-            }
-        };
     }
 
     /// <summary>

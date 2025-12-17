@@ -8,6 +8,9 @@ namespace MyRedis.Services.Commands;
 /// <summary>
 /// Implementation of command execution context that provides all necessary services
 /// and state for Redis command handlers to execute their operations.
+/// 
+/// This interface follows the Dependency Injection pattern, giving command handlers
+/// access to all the services they need without tight coupling to concrete implementations.
 ///
 /// Design Pattern: Context Object Pattern
 /// This class encapsulates all per-request state and services in a single object,

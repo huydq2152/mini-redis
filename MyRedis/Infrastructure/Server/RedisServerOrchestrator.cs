@@ -118,7 +118,7 @@ public class RedisServerOrchestrator
     private readonly CommandProcessor _commandProcessor;
 
     // Handles background maintenance (expiration, idle cleanup)
-    private readonly BackgroundTaskManager _backgroundTaskManager;
+    private readonly BackgroundTaskManager _backgroundTaskManager1;
 
     /// <summary>
     /// Tracks connections with pending buffered commands.
@@ -177,12 +177,12 @@ public class RedisServerOrchestrator
     public RedisServerOrchestrator(
         NetworkServer networkServer,
         CommandProcessor commandProcessor,
-        BackgroundTaskManager backgroundTaskManager)
+        BackgroundTaskManager backgroundTaskManager1)
     {
         // Validate all dependencies (fail-fast if misconfigured)
         _networkServer = networkServer ?? throw new ArgumentNullException(nameof(networkServer));
         _commandProcessor = commandProcessor ?? throw new ArgumentNullException(nameof(commandProcessor));
-        _backgroundTaskManager = backgroundTaskManager ?? throw new ArgumentNullException(nameof(backgroundTaskManager));
+        _backgroundTaskManager1 = backgroundTaskManager1 ?? throw new ArgumentNullException(nameof(backgroundTaskManager1));
     }
 
     /// <summary>
@@ -295,7 +295,7 @@ public class RedisServerOrchestrator
             {
                 // No pending work, safe to sleep
                 // BackgroundTaskManager tells us when the next maintenance task is needed
-                selectTimeout = _backgroundTaskManager.GetNextTimeout();
+                selectTimeout = _backgroundTaskManager1.GetNextTimeout();
             }
 
             // Convert to microseconds for Socket.Select()
@@ -325,7 +325,7 @@ public class RedisServerOrchestrator
             // - Active expiration: Delete keys whose TTL expired
             // - Idle cleanup: Close connections with no recent activity
             // Both operations are throttled to prevent long-running work
-            _backgroundTaskManager.ProcessBackgroundTasks();
+            _backgroundTaskManager1.ProcessBackgroundTasks();
 
             // STEP 6: Loop back to step 1
             // This continues indefinitely until cancellation requested

@@ -32,7 +32,6 @@ public abstract class BackgroundTaskBase : IBackgroundTask
 
     /// <summary>
     /// Gets the priority of this task.
-    /// Default: 50 (normal priority)
     /// </summary>
     public virtual int Priority => 50;
 
@@ -68,15 +67,8 @@ public abstract class BackgroundTaskBase : IBackgroundTask
     }
 
     /// <summary>
-    /// Calculates milliseconds until next execution.
-    ///
-    /// Default Implementation: Interval-based scheduling
-    /// - Returns time until _nextRunTime
-    /// - Returns 0 if already past _nextRunTime (overdue)
-    ///
-    /// Override this for custom scheduling logic:
-    /// - Work-driven: return 0 if work queue is non-empty
-    /// - Hybrid: return min(interval delay, work availability)
+    /// Calculates milliseconds until next execution .
+    /// Implement default interval-based scheduling.
     /// </summary>
     public virtual int GetNextRunDelay()
     {
@@ -87,8 +79,6 @@ public abstract class BackgroundTaskBase : IBackgroundTask
 
     /// <summary>
     /// Executes the background task work.
-    ///
-    /// For custom scheduling, override this method entirely.
     /// </summary>
     public virtual void Execute()
     {
@@ -101,7 +91,6 @@ public abstract class BackgroundTaskBase : IBackgroundTask
 
     /// <summary>
     /// Performs the actual task work.
-    /// Override this in derived classes to implement task-specific logic.
     ///
     /// Execution Contract:
     /// - Complete quickly to avoid blocking event loop

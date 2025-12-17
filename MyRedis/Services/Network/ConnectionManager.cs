@@ -130,8 +130,7 @@ public class ConnectionManager : IConnectionManager
     /// exactly the right amount of time before checking for idle connections again.
     /// </summary>
     /// <returns>
-    /// Milliseconds until the next connection becomes idle, or a default timeout
-    /// (typically 1000ms) if no connections are being tracked.
+    /// Milliseconds until the next connection becomes idle, or a default timeout if no connections are being tracked.
     /// </returns>
     /// <remarks>
     /// Used by BackgroundTaskManager to optimize the event loop:

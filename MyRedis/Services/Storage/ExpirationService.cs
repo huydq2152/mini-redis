@@ -7,6 +7,9 @@ namespace MyRedis.Services.Storage;
 /// Service adapter that provides Redis key expiration and Time-To-Live (TTL) management
 /// by wrapping the existing ExpirationManager implementation.
 ///
+/// Supports automatic expiration of keys after a specified time,
+/// which is essential for caching, session management, and temporary data.
+///
 /// Design Pattern: Adapter Pattern
 /// This class adapts the concrete ExpirationManager to the IExpirationService interface,
 /// enabling dependency injection and providing a clean abstraction for TTL operations.
@@ -16,13 +19,6 @@ namespace MyRedis.Services.Storage;
 /// Redis uses both active and passive expiration strategies for optimal performance:
 /// - Passive: Keys are checked for expiration when accessed (GET, EXISTS, etc.)
 /// - Active: Background process periodically scans and removes expired keys
-///
-/// Implementation Strategy (Min-Heap Priority Queue):
-/// The underlying ExpirationManager uses a min-heap data structure where:
-/// - Keys are ordered by their absolute expiration time
-/// - The heap root always contains the next key to expire
-/// - O(log n) complexity for SetExpiration and ProcessExpiredKeys
-/// - O(1) complexity for GetNextTimeout (peek at root)
 ///
 /// Expiration Workflow:
 /// 1. Client issues EXPIRE command → SetExpiration() adds key to heap
@@ -63,16 +59,6 @@ public class ExpirationService : IExpirationService
     /// </summary>
     /// <param name="key">The Redis key to set expiration for</param>
     /// <param name="timeoutMs">Timeout in milliseconds from now (relative time)</param>
-    /// <remarks>
-    /// Operation details:
-    /// 1. Calculates absolute expiration time (current time + timeout)
-    /// 2. Adds or updates the key in the min-heap priority queue
-    /// 3. Heap maintains ordering by expiration time for efficient processing
-    /// 
-    /// If the key already has an expiration, it's updated to the new value.
-    /// The key continues to exist in the DataStore until expiration occurs.
-    /// Thread-safe for concurrent access from multiple command handlers.
-    /// </remarks>
     public void SetExpiration(string key, int timeoutMs)
     {
         _expirationManager.SetExpiration(key, timeoutMs);
@@ -84,11 +70,6 @@ public class ExpirationService : IExpirationService
     /// </summary>
     /// <param name="key">The Redis key to remove expiration tracking for</param>
     /// <remarks>
-    /// Common usage scenarios:
-    /// - DEL command: Remove expiration when manually deleting a key
-    /// - SET command: Clear expiration when overwriting a key value
-    /// - PERSIST command: Make a key permanent by removing its TTL
-    /// 
     /// Safe to call even if the key has no expiration set (no-op).
     /// After calling this, the key will never expire automatically.
     /// Thread-safe for concurrent access with other expiration operations.
@@ -108,19 +89,6 @@ public class ExpirationService : IExpirationService
     /// True if the key has an expiration set AND the expiration time has passed.
     /// False if the key has no expiration or the expiration time has not yet been reached.
     /// </returns>
-    /// <remarks>
-    /// Used by command handlers (GET, EXISTS, etc.) to implement lazy expiration:
-    /// <code>
-    /// if (expirationService.IsExpired(key)) {
-    ///     dataStore.Remove(key);
-    ///     expirationService.RemoveExpiration(key);
-    ///     return Nil; // Key expired, treat as non-existent
-    /// }
-    /// </code>
-    /// 
-    /// Performance: O(1) - simple timestamp comparison
-    /// Critical for maintaining data consistency and Redis-compliant behavior.
-    /// </remarks>
     public bool IsExpired(string key)
     {
         return _expirationManager.IsExpired(key);
@@ -145,7 +113,7 @@ public class ExpirationService : IExpirationService
     /// - positive value → value/1000 (convert to seconds for Redis compatibility)
     /// - Used with DataStore.Exists() check → -2 (key doesn't exist)
     /// </remarks>
-    public long? GetTtl(string key)
+    public long? GetTimeToLive(string key)
     {
         return _expirationManager.GetTimeToLive(key);
     }
@@ -158,11 +126,6 @@ public class ExpirationService : IExpirationService
     /// Milliseconds until the next key expiration, or a default timeout if no keys have expiration.
     /// </returns>
     /// <remarks>
-    /// Implementation details:
-    /// 1. Peeks at the min-heap root (earliest expiration time)
-    /// 2. Calculates time difference from current time
-    /// 3. Returns the difference (may be 0 if keys are already expired)
-    /// 
     /// Used by BackgroundTaskManager to optimize event loop timing:
     /// - Avoids constant polling by sleeping until expiration processing is needed
     /// - Ensures timely cleanup of expired keys
@@ -183,15 +146,6 @@ public class ExpirationService : IExpirationService
     /// The list may be empty if no keys have expired since the last check.
     /// </returns>
     /// <remarks>
-    /// Active expiration algorithm:
-    /// 1. Check the min-heap root for the earliest expiration
-    /// 2. If expired, remove from heap and add to result list
-    /// 3. Repeat until the root is not expired (or heap is empty)
-    /// 4. Return all expired keys for DataStore cleanup
-    /// 
-    /// Performance: O(k log n) where k is the number of expired keys
-    /// Typically k is small (0-10 keys per iteration) making this very efficient.
-    /// 
     /// The caller (BackgroundTaskManager) is responsible for:
     /// - Removing returned keys from the DataStore
     /// - Calling this method periodically for timely cleanup

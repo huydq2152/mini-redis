@@ -14,13 +14,32 @@ namespace MyRedis.Services.Network;
 /// This allows command handlers to be unit tested with mock response writers.
 ///
 /// Redis Binary Protocol Format:
-/// All responses follow a binary protocol with type-length-value encoding:
+/// All responses follow a binary protocol with type-length-value encoding (start with a 1-byte type code):
 ///
-/// Type 0 (Nil):     [0x00]
-/// Type 1 (Error):   [0x01][4-byte code][4-byte msg len][UTF-8 message]
-/// Type 2 (String):  [0x02][4-byte length][UTF-8 string data]
+/// Type 0 (Nil): [0x00]
+///   - Represents null/non-existent values
+///   - Used when GET fails to find a key
+///   - Total size: 1 byte
+///
+/// Type 1 (Error): [0x01][4-byte code][4-byte msg len][UTF-8 message]
+///   - Represents command execution errors
+///   - Examples: wrong arguments, wrong type, unknown command
+///   - Includes error code and human-readable message
+///
+/// Type 2 (String): [0x02][4-byte length][UTF-8 string data]
+///   - Variable-length string responses
+///   - Used for GET, ECHO, simple OK replies
+///   - Length is in bytes (not characters)
+///
 /// Type 3 (Integer): [0x03][8-byte int64 little-endian]
-/// Type 4 (Array):   [0x04][4-byte count][element1][element2]...
+///   - 64-bit signed integer responses
+///   - Used for DEL (count), TTL (seconds), counters
+///   - Always 9 bytes total (1 + 8)
+///
+/// Type 4 (Array): [0x04][4-byte count][element1][element2]...
+///   - Multi-value responses
+///   - Each element is a full response (can be nested)
+///   - Used for KEYS, ZRANGE, multi-key operations
 ///
 /// Usage Pattern:
 /// Command handlers receive this service through ICommandContext and use it to:
@@ -52,12 +71,6 @@ public class ResponseWriterService : IResponseWriter
     /// <remarks>
     /// Protocol Format: [Type 2][4-byte length][UTF-8 bytes]
     ///
-    /// Used by commands such as:
-    /// - GET: Return stored string values
-    /// - ECHO: Return the echoed argument
-    /// - PING: Return "PONG" response
-    /// - Status responses: "OK" confirmations
-    ///
     /// The string is encoded as UTF-8 to support international characters.
     /// Length field contains byte count, not character count (important for multibyte chars).
     /// Delegates to the static ResponseWriter for actual protocol implementation.
@@ -78,14 +91,9 @@ public class ResponseWriterService : IResponseWriter
     /// <remarks>
     /// Protocol Format: [Type 3][8-byte int64 little-endian]
     ///
-    /// Used by commands such as:
-    /// - DEL: Number of keys successfully deleted
-    /// - TTL: Remaining seconds until expiration (-1 for no expiration, -2 for non-existent key)
-    /// - ZADD: Number of new elements added to sorted set
-    /// - DBSIZE: Total number of keys in database
-    ///
     /// Always uses 64-bit signed integer for consistency across all numeric responses.
-    /// Little-endian format matches x86/x64 architecture for optimal performance.
+    /// Little-endian format matches x86/x64 architecture for optimal performance, which helps "memcpy" operations
+    /// avoid wasting CPU cycles to reverse byte order when forwarding data from server to client.
     /// Total response size is always 9 bytes (1 type + 8 data).
     ///
     /// Performance: Zero-allocation via IBufferWriter<byte>.
@@ -102,11 +110,6 @@ public class ResponseWriterService : IResponseWriter
     /// <param name="writer">The buffer writer (from connection.Writer)</param>
     /// <remarks>
     /// Protocol Format: [Type 0] (single byte)
-    ///
-    /// Used when:
-    /// - GET command on a non-existent key
-    /// - GET command on an expired key (TTL reached zero)
-    /// - Any operation that returns "no value"
     ///
     /// This is the most efficient possible response - just 1 byte.
     /// Equivalent to Redis RESP protocol's "$-1\r\n" (bulk string null).
@@ -129,18 +132,8 @@ public class ResponseWriterService : IResponseWriter
     /// <remarks>
     /// Protocol Format: [Type 1][4-byte code][4-byte msg len][UTF-8 message]
     ///
-    /// Used for various error conditions:
-    /// - ERR wrong number of arguments: Command invoked with incorrect argument count
-    /// - WRONGTYPE Operation against a key holding the wrong kind of value: Type mismatch
-    /// - Unknown cmd: Command name not recognized
-    ///
     /// The error code is currently not used extensively (always set to 1),
     /// but provides extensibility for categorizing errors in the future.
-    ///
-    /// Common error messages follow Redis conventions:
-    /// - "ERR wrong number of arguments for 'commandname' command"
-    /// - "WRONGTYPE Operation against a key holding the wrong kind of value"
-    /// - "ERR value is not an integer or out of range"
     ///
     /// Performance: Zero-allocation via IBufferWriter<byte>.
     /// </remarks>
@@ -160,19 +153,6 @@ public class ResponseWriterService : IResponseWriter
     ///
     /// After calling this method, the caller MUST write exactly 'count' elements
     /// using other Write methods (WriteString, WriteInt, WriteNil, or even WriteArrayHeader for nesting).
-    ///
-    /// Used by commands that return multiple values:
-    /// - KEYS: Returns array of key name strings
-    /// - ZRANGE: Returns array of sorted set member strings
-    /// - MGET: Returns array of values (strings or nils)
-    ///
-    /// Example usage for ZRANGE returning ["Alice", "Bob", "Charlie"]:
-    /// <code>
-    /// writer.WriteArrayHeader(buffer, 3);
-    /// writer.WriteString(buffer, "Alice");
-    /// writer.WriteString(buffer, "Bob");
-    /// writer.WriteString(buffer, "Charlie");
-    /// </code>
     ///
     /// The protocol allows nested arrays (an element can itself be an array),
     /// enabling complex data structure responses.

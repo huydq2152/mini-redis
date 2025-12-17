@@ -9,17 +9,6 @@ namespace MyRedis.Infrastructure.DependencyInjection;
 /// - Manage singleton lifetimes
 /// - Support dependency injection
 ///
-/// What is Dependency Injection?
-/// Instead of creating dependencies directly:
-///   var dataStore = new InMemoryDataStore();
-///   var processor = new CommandProcessor(dataStore, ...);
-///
-/// Services declare what they need (constructor parameters):
-///   public CommandProcessor(IDataStore dataStore, ...)
-///
-/// And the container provides it:
-///   var processor = container.Resolve<CommandProcessor>();
-///
 /// Benefits:
 /// - Loose coupling: Components depend on interfaces, not concrete classes
 /// - Testability: Easy to inject mocks/fakes for testing
@@ -39,20 +28,7 @@ namespace MyRedis.Infrastructure.DependencyInjection;
 /// - No named registrations (one instance per type)
 /// - No IDisposable support (no cleanup on dispose)
 ///
-/// This is intentionally simple. For production, consider:
-/// - Microsoft.Extensions.DependencyInjection
-/// - Autofac
-/// - Ninject
-///
-/// Usage Pattern:
-/// 1. Register services:
-///    container.RegisterSingleton<IDataStore>(new InMemoryDataStore());
-///    container.RegisterSingleton<IProcessor>(c => new Processor(c.Resolve<IDataStore>()));
-///
-/// 2. Resolve root:
-///    var server = container.Resolve<RedisServerOrchestrator>();
-///
-/// 3. Container resolves entire dependency graph automatically
+/// This is intentionally simple. For production, consider using a full-featured DI framework
 ///
 /// Design Pattern: Service Locator + Factory Pattern
 /// - Service Locator: Resolve() finds registered services
@@ -74,25 +50,7 @@ public class ServiceContainer
     /// Use this when you already have an instance and want to register it.
     ///
     /// The instance is stored immediately and will be returned whenever
-    /// Resolve&lt;T&gt;() is called.
-    ///
-    /// Example:
-    /// var dataStore = new InMemoryDataStore();
-    /// container.RegisterSingleton&lt;IDataStore&gt;(dataStore);
-    ///
-    /// Why Use This?
-    /// - Simple: No factory needed
-    /// - Pre-configured: Instance is already set up
-    /// - Immediate: No lazy creation
-    ///
-    /// When to Use:
-    /// - Service has no dependencies
-    /// - Instance is already created
-    /// - No need for lazy initialization
-    ///
-    /// Type Parameter:
-    /// T is typically an interface (IDataStore) but can be concrete class.
-    /// The instance must be assignable to T.
+    /// Resolve() is called.
     /// </summary>
     /// <typeparam name="T">Service type to register</typeparam>
     /// <param name="instance">Pre-created instance to register</param>
@@ -104,43 +62,17 @@ public class ServiceContainer
     }
 
     /// <summary>
-    /// Registers a factory for creating instances (non-singleton).
-    ///
-    /// NOT CURRENTLY USED in MyRedis (all services are singletons).
-    ///
-    /// Unlike RegisterSingleton(factory), this creates a NEW instance
-    /// every time Resolve&lt;T&gt;() is called.
-    ///
-    /// Use Case:
-    /// If we wanted transient lifetime (new instance per resolve):
-    /// container.RegisterFactory&lt;Connection&gt;(c => new Connection(socket));
-    ///
-    /// Each Resolve&lt;Connection&gt;() would create a new Connection.
-    ///
-    /// Why Not Used?
-    /// MyRedis uses singletons for all services (shared state).
-    /// </summary>
-    /// <typeparam name="T">Service type to register</typeparam>
-    /// <param name="factory">Factory function that creates instances</param>
-    public void RegisterFactory<T>(Func<ServiceContainer, T> factory) where T : class
-    {
-        // Store factory in factories dictionary
-        // Each resolve calls factory to create new instance (no caching)
-        _factories[typeof(T)] = container => factory(container);
-    }
-
-    /// <summary>
     /// Registers a singleton factory (lazy singleton creation).
     ///
     /// This is the most common registration method in MyRedis.
     ///
     /// How It Works:
     /// 1. Factory is stored but NOT called yet (lazy)
-    /// 2. On first Resolve&lt;T&gt;():
+    /// 2. On first Resolve():
     ///    a. Call factory to create instance
     ///    b. Cache instance in _singletons
     ///    c. Return instance
-    /// 3. On subsequent Resolve&lt;T&gt;():
+    /// 3. On subsequent Resolve():
     ///    a. Return cached instance (don't call factory again)
     ///
     /// Why Lazy?
@@ -148,34 +80,10 @@ public class ServiceContainer
     /// - Factory can resolve dependencies from container
     /// - Instance created only when needed
     ///
-    /// Example:
-    /// container.RegisterSingleton&lt;CommandProcessor&gt;(c => new CommandProcessor(
-    ///     c.Resolve&lt;ICommandRegistry&gt;(),
-    ///     c.Resolve&lt;IDataStore&gt;(),
-    ///     ...
-    /// ));
-    ///
-    /// When Resolve&lt;CommandProcessor&gt;() is called:
-    /// 1. Factory executes
-    /// 2. Factory calls c.Resolve&lt;ICommandRegistry&gt;() (recursive resolution)
-    /// 3. Factory calls c.Resolve&lt;IDataStore&gt;() (recursive resolution)
-    /// 4. Factory creates CommandProcessor with resolved dependencies
-    /// 5. Instance cached and returned
-    ///
     /// Dependency Graph Resolution:
-    /// Container automatically resolves the entire dependency graph:
-    /// Resolve&lt;RedisServerOrchestrator&gt;()
-    ///   -&gt; Resolve&lt;NetworkServer&gt;()
-    ///       -&gt; Resolve&lt;IConnectionManager&gt;()
-    ///   -&gt; Resolve&lt;CommandProcessor&gt;()
-    ///       -&gt; Resolve&lt;ICommandRegistry&gt;()
-    ///       -&gt; Resolve&lt;IDataStore&gt;()
-    ///       -&gt; Resolve&lt;IExpirationService&gt;()
-    ///       -&gt; Resolve&lt;IResponseWriter&gt;()
-    ///   -&gt; Resolve&lt;BackgroundTaskManager&gt;()
-    ///       -&gt; ... (and so on)
+    /// Container automatically resolves the entire dependency graph
     ///
-    /// All resolved automatically with one call!
+    /// All resolved automatically with one call
     /// </summary>
     /// <typeparam name="T">Service type to register</typeparam>
     /// <param name="factory">Factory function that creates the instance</param>
@@ -218,24 +126,11 @@ public class ServiceContainer
     /// - Subsequent calls: Returns same instance (singleton)
     ///
     /// Dependency Resolution:
-    /// Factories can call container.Resolve() to get their dependencies:
-    /// container.RegisterSingleton&lt;Processor&gt;(c => new Processor(
-    ///     c.Resolve&lt;IDataStore&gt;()  // Recursive resolve
-    /// ));
+    /// Factories can call container.Resolve() to get their dependencies.
     ///
     /// This allows automatic dependency graph resolution.
     ///
-    /// Example:
-    /// var orchestrator = container.Resolve&lt;RedisServerOrchestrator&gt;();
-    /// // Container automatically creates all dependencies
-    ///
-    /// Circular Dependencies:
-    /// If A depends on B and B depends on A:
-    /// A factory calls c.Resolve&lt;B&gt;()
-    /// B factory calls c.Resolve&lt;A&gt;()
-    /// Result: StackOverflowException
-    ///
-    /// To prevent: Design dependencies as a DAG (directed acyclic graph)
+    /// To prevent circular dependency: Design dependencies as a DAG (directed acyclic graph)
     ///
     /// Thread Safety:
     /// - NOT thread-safe
@@ -247,14 +142,14 @@ public class ServiceContainer
     /// <exception cref="InvalidOperationException">Service not registered</exception>
     public T Resolve<T>() where T : class
     {
-        // FAST PATH: Check if instance already exists (singleton cache)
+        // Check if instance already exists (singleton cache)
         if (_singletons.TryGetValue(typeof(T), out var singleton))
         {
-            // Instance already created, return it (cast to T)
+            // Instance already created, return 
             return (T)singleton;
         }
 
-        // SLOW PATH: Check if factory exists (lazy singleton)
+        // Check if factory exists (lazy singleton)
         if (_factories.TryGetValue(typeof(T), out var factory))
         {
             // Call factory to create instance
@@ -263,55 +158,8 @@ public class ServiceContainer
             return (T)factory(this);
         }
 
-        // ERROR: Service not registered
+        // Service not registered
         // This is a configuration error (forgot to register)
         throw new InvalidOperationException($"Service of type {typeof(T).Name} is not registered.");
-    }
-
-    /// <summary>
-    /// Tries to resolve a service instance without throwing on failure.
-    ///
-    /// This is a safe version of Resolve() that returns null instead of throwing.
-    ///
-    /// Use When:
-    /// - Optional dependencies (service may not be registered)
-    /// - Feature detection (check if service available)
-    /// - Graceful degradation (fallback if service missing)
-    ///
-    /// NOT CURRENTLY USED in MyRedis (all dependencies are required).
-    ///
-    /// Example:
-    /// var cache = container.TryResolve&lt;ICache&gt;();
-    /// if (cache != null)
-    /// {
-    ///     // Use cache
-    /// }
-    /// else
-    /// {
-    ///     // No cache available, skip caching
-    /// }
-    ///
-    /// Performance:
-    /// Uses try-catch which has overhead (avoid in hot paths).
-    /// Better approach would be:
-    /// - Add TryGetValue-style method
-    /// - Return bool + out parameter
-    /// But this is simpler for rare usage.
-    /// </summary>
-    /// <typeparam name="T">Service type to resolve</typeparam>
-    /// <returns>Service instance if registered, null otherwise</returns>
-    public T? TryResolve<T>() where T : class
-    {
-        try
-        {
-            // Try normal resolution
-            return Resolve<T>();
-        }
-        catch
-        {
-            // Resolution failed (service not registered)
-            // Return null instead of throwing
-            return null;
-        }
     }
 }

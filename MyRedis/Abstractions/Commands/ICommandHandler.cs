@@ -12,13 +12,6 @@ namespace MyRedis.Abstractions.Commands;
 /// - Makes it easy to add new commands without modifying core infrastructure
 /// - Enables command introspection and registration at runtime
 ///
-/// How Command Handlers Work:
-/// 1. Client sends: "GET mykey"
-/// 2. ProtocolParser extracts command name and arguments: ["GET", "mykey"]
-/// 3. CommandRegistry looks up handler by name: GetCommandHandler
-/// 4. CommandProcessor calls HandleAsync with context and args: ["mykey"]
-/// 5. Handler executes logic and writes response using context.ResponseWriter
-///
 /// Command Lifecycle:
 /// 1. Registration: Handler is registered in CommandRegistry during server startup
 /// 2. Execution: Handler is invoked for each matching command from clients
@@ -35,25 +28,14 @@ namespace MyRedis.Abstractions.Commands;
 public interface ICommandHandler
 {
     /// <summary>
-    /// Gets the Redis command name that this handler processes.
+    /// Gets the command name that this handler processes.
     ///
     /// This property is used by the CommandRegistry to map command names to handlers.
-    /// Command names are case-insensitive (GET, get, GeT are all treated the same).
-    ///
-    /// Examples:
-    /// - "GET" for key retrieval
-    /// - "SET" for key storage
-    /// - "DEL" for key deletion
-    /// - "PING" for connectivity testing
-    /// - "ZADD" for sorted set operations
-    ///
-    /// The command name should match the Redis protocol specification exactly.
-    /// This ensures compatibility with Redis clients and tools.
     /// </summary>
     string CommandName { get; }
 
     /// <summary>
-    /// Executes the Redis command asynchronously with the provided context and arguments.
+    /// Executes the command asynchronously with the provided context and arguments.
     ///
     /// This is the core method where command-specific logic is implemented.
     /// The handler receives a complete execution context with access to:
@@ -61,12 +43,6 @@ public interface ICommandHandler
     /// - Expiration service for TTL management
     /// - Response writer for sending formatted responses to the client
     /// - Connection information for buffer management
-    ///
-    /// Argument Processing:
-    /// - Args contains only the command arguments (command name is already removed)
-    /// - For "SET mykey myvalue", args will be ["mykey", "myvalue"]
-    /// - For "GET mykey", args will be ["mykey"]
-    /// - For "PING", args will be an empty list
     ///
     /// Response Requirements:
     /// - Handler MUST write exactly one response using context.ResponseWriter
