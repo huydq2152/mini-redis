@@ -1,4 +1,5 @@
 using MyRedis.Abstractions.Commands;
+using MyRedis.Abstractions.Configuration;
 using MyRedis.Abstractions.Network;
 using MyRedis.Abstractions.Storage;
 using MyRedis.Commands;
@@ -9,6 +10,7 @@ using MyRedis.Infrastructure.Commands;
 using MyRedis.Infrastructure.DependencyInjection;
 using MyRedis.Infrastructure.Network;
 using MyRedis.Services.Commands;
+using MyRedis.Services.Configuration;
 using MyRedis.Services.Network;
 using MyRedis.Services.Storage;
 using MyRedis.System.Tasks;
@@ -128,6 +130,11 @@ public static class RedisServerFactory
     /// </summary>
     private static void RegisterCoreServices(ServiceContainer container)
     {
+        // Register configuration service FIRST (other services may depend on it)
+        var configService = new ConfigurationService();
+        ConfigurationRegistry.RegisterDefaultParameters(configService);
+        container.RegisterSingleton<IConfigurationService>(configService);
+
         // Register managers first (other services may depend on them)
         // These are concrete classes that predate the service abstraction layer
         container.RegisterSingleton(new ExpirationManager());
@@ -172,10 +179,12 @@ public static class RedisServerFactory
         // Resolve dependencies needed by some handlers
         var registry = container.Resolve<ICommandRegistry>();
         var backgroundTaskSystem = container.Resolve<BackgroundTaskSystem>();
+        var configService = container.Resolve<IConfigurationService>();
 
         // Create instances of all command handlers
         // Most handlers are stateless (no constructor parameters)
         // DelCommandHandler needs BackgroundTaskSystem for deferred cleanup
+        // ConfigCommandHandler needs IConfigurationService for parameter access
         var handlers = new ICommandHandler[]
         {
             new GetCommandHandler(),
@@ -189,7 +198,8 @@ public static class RedisServerFactory
             new TtlCommandHandler(),
             new ZAddCommandHandler(),
             new ZRangeCommandHandler(),
-            new ZRemCommandHandler()
+            new ZRemCommandHandler(),
+            new ConfigCommandHandler(configService)
         };
 
         // Register each handler with the command registry

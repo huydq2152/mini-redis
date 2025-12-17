@@ -1,0 +1,91 @@
+using MyRedis.Abstractions.Configuration;
+
+namespace MyRedis.Services.Configuration.Validators;
+
+/// <summary>
+/// Numeric validator with range constraints and unit support.
+/// Supports: 100, 1kb, 1mb, 1gb
+/// </summary>
+public class NumericValidator : IParameterValidator
+{
+    private readonly long _min;
+    private readonly long _max;
+    private readonly bool _allowUnits;
+
+    public NumericValidator(long min = long.MinValue, long max = long.MaxValue, bool allowUnits = false)
+    {
+        _min = min;
+        _max = max;
+        _allowUnits = allowUnits;
+    }
+
+    public ValidationResult Validate(string value)
+    {
+        long parsedValue;
+
+        if (_allowUnits)
+        {
+            // Parse with units: 1kb, 1mb, 1gb
+            if (!TryParseWithUnits(value, out parsedValue))
+            {
+                return ValidationResult.Failure(
+                    $"Invalid numeric value '{value}'. Expected integer or value with units (kb, mb, gb).");
+            }
+        }
+        else
+        {
+            // Parse as plain integer
+            if (!long.TryParse(value, out parsedValue))
+            {
+                return ValidationResult.Failure($"Invalid integer value '{value}'.");
+            }
+        }
+
+        // Range check
+        if (parsedValue < _min || parsedValue > _max)
+        {
+            return ValidationResult.Failure(
+                $"Value {parsedValue} out of range. Must be between {_min} and {_max}.");
+        }
+
+        return ValidationResult.Success();
+    }
+
+    public string GetValidationDescription()
+    {
+        var desc = $"integer between {_min} and {_max}";
+        if (_allowUnits) desc += " (supports kb/mb/gb units)";
+        return desc;
+    }
+
+    private bool TryParseWithUnits(string value, out long result)
+    {
+        value = value.Trim().ToLower();
+        long multiplier = 1;
+
+        if (value.EndsWith("gb"))
+        {
+            multiplier = 1024 * 1024 * 1024;
+            value = value[..^2];
+        }
+        else if (value.EndsWith("mb"))
+        {
+            multiplier = 1024 * 1024;
+            value = value[..^2];
+        }
+        else if (value.EndsWith("kb"))
+        {
+            multiplier = 1024;
+            value = value[..^2];
+        }
+
+        if (long.TryParse(value.Trim(), out var baseValue))
+        {
+            result = baseValue * multiplier;
+            return true;
+        }
+
+        result = 0;
+        return false;
+    }
+}
