@@ -183,13 +183,13 @@ public static class RedisServerFactory
 
         // Create instances of all command handlers
         // Most handlers are stateless (no constructor parameters)
-        // DelCommandHandler needs BackgroundTaskSystem for deferred cleanup
+        // DelCommandHandler needs BackgroundTaskSystem and IConfigurationService (for hot-reload)
         // ConfigCommandHandler needs IConfigurationService for parameter access
         var handlers = new ICommandHandler[]
         {
             new GetCommandHandler(),
             new SetCommandHandler(),
-            new DelCommandHandler(backgroundTaskSystem),
+            new DelCommandHandler(backgroundTaskSystem, configService),
             new KeysCommandHandler(),
             new ScanCommandHandler(),
             new PingCommandHandler(),
@@ -238,15 +238,17 @@ public static class RedisServerFactory
                 c.Resolve<ICommandRegistry>(),
                 c.Resolve<IDataStore>(),
                 c.Resolve<IExpirationService>(),
-                c.Resolve<IResponseWriter>()));
+                c.Resolve<IResponseWriter>(),
+                c.Resolve<IConfigurationService>()));
 
         container.RegisterSingleton<BackgroundTaskManager>(c =>
         {
             var manager = new BackgroundTaskManager();
-            
+
             manager.Register(new ExpirationTask(
                 c.Resolve<IDataStore>(),
-                c.Resolve<IExpirationService>()));
+                c.Resolve<IExpirationService>(),
+                c.Resolve<IConfigurationService>()));
 
             manager.Register(new IdleConnectionCleanupTask(
                 c.Resolve<IConnectionManager>(),

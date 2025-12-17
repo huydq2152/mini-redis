@@ -1,3 +1,4 @@
+using MyRedis.Abstractions.Configuration;
 using MyRedis.Abstractions.Storage;
 
 namespace MyRedis.Core.Background;
@@ -30,23 +31,23 @@ public class ExpirationTask : BackgroundTaskBase
 {
     private readonly IDataStore _dataStore;
     private readonly IExpirationService _expirationService;
+    private readonly IConfigurationService _configService;
 
     /// <summary>
     /// Creates a new expiration task.
     /// </summary>
     /// <param name="dataStore">Data store for removing expired keys</param>
     /// <param name="expirationService">Service that tracks and finds expired keys</param>
-    /// <param name="intervalMs">Milliseconds between expiration scans (default: 100ms)</param>
-    /// <param name="maxKeysPerCycle">Maximum keys to process per execution (default: 100)</param>
+    /// <param name="configService">Configuration service for runtime parameters (hot-reload)</param>
     public ExpirationTask(
         IDataStore dataStore,
         IExpirationService expirationService,
-        int intervalMs = 100,
-        int maxKeysPerCycle = 100)
-        : base("KeyExpiration", intervalMs, maxKeysPerCycle, priority: 100)
+        IConfigurationService configService)
+        : base("KeyExpiration", intervalMs: 100, maxWorkPerCycle: 100, priority: 100)
     {
         _dataStore = dataStore ?? throw new ArgumentNullException(nameof(dataStore));
         _expirationService = expirationService ?? throw new ArgumentNullException(nameof(expirationService));
+        _configService = configService ?? throw new ArgumentNullException(nameof(configService));
     }
 
     /// <summary>
@@ -67,11 +68,12 @@ public class ExpirationTask : BackgroundTaskBase
     /// Processes and deletes expired keys.
     ///
     /// Process:
-    /// 1. Get expired keys from expiration service (up to MaxWorkPerCycle)
-    /// 2. Delete each expired key from the data store
+    /// 1. Read max keys per cycle from config (hot-reload support!)
+    /// 2. Get expired keys from expiration service (up to configured limit)
+    /// 3. Delete each expired key from the data store
     ///
     /// Throttling:
-    /// - ExpirationService limits keys returned based on MaxWorkPerCycle
+    /// - expire-keys-per-cycle config limits keys processed
     /// - If many keys expire at once, they're processed over multiple cycles
     /// - Prevents long-running expiration from blocking the event loop
     ///
@@ -80,14 +82,21 @@ public class ExpirationTask : BackgroundTaskBase
     /// </summary>
     protected override void ExecuteCore()
     {
-        // Get list of keys that have expired and delete 
+        // Read max keys from config (hot-reload support!)
+        // This allows runtime adjustment via CONFIG SET expire-keys-per-cycle <value>
+        var maxKeys = _configService.Get<int>("expire-keys-per-cycle");
+
+        // Get list of keys that have expired (up to configured limit)
         var expiredKeys = _expirationService.ProcessExpiredKeys();
 
         // Delete each expired key from the data store
-        // NO LOCKS - Single-threaded event loop architecture
+        // Limit to configured max to prevent blocking
+        int deleted = 0;
         foreach (var key in expiredKeys)
         {
+            if (deleted >= maxKeys) break;
             _dataStore.Remove(key);
+            deleted++;
         }
     }
 

@@ -1,5 +1,6 @@
 using MyRedis.Abstractions;
 using MyRedis.Abstractions.Commands;
+using MyRedis.Abstractions.Configuration;
 using MyRedis.System;
 using MyRedis.System.Tasks;
 
@@ -13,21 +14,6 @@ namespace MyRedis.Commands;
 public class DelCommandHandler : BaseCommandHandler
 {
     /// <summary>
-    /// Threshold for determining when to use async deletion (lazyfree).
-    /// Objects with fewer elements than this threshold are deleted synchronously.
-    /// Objects with this many or more elements are deleted asynchronously to avoid blocking.
-    ///
-    /// This value matches Redis's lazyfree-lazy-server-del configuration default.
-    ///
-    /// Rationale:
-    /// - Sync deletion of small objects (~1-63 elements): ~100 nanoseconds
-    /// - Async overhead (Action allocation, Channel enqueue, context switch): ~few microseconds
-    /// - Below threshold: Overhead > Benefit, so use sync
-    /// - Above threshold: Benefit > Overhead, so use async
-    /// </summary>
-    private const int LazyFreeThreshold = 64;
-
-    /// <summary>
     /// Background task system for handling asynchronous deletion of large objects.
     /// Uses the LazyFree category to prevent the main Redis thread from being blocked
     /// during expensive cleanup operations.
@@ -35,13 +21,21 @@ public class DelCommandHandler : BaseCommandHandler
     private readonly BackgroundTaskSystem _backgroundTaskSystem;
 
     /// <summary>
-    /// Initializes a new instance of the DelCommandHandler with the required background task system.
+    /// Configuration service for accessing runtime parameters.
+    /// Used to read the lazyfree-lazy-server-del threshold dynamically (hot-reload).
+    /// </summary>
+    private readonly IConfigurationService _configService;
+
+    /// <summary>
+    /// Initializes a new instance of the DelCommandHandler with the required dependencies.
     /// </summary>
     /// <param name="backgroundTaskSystem">The background task system for categorized asynchronous operations</param>
-    /// <exception cref="ArgumentNullException">Thrown when backgroundTaskSystem is null</exception>
-    public DelCommandHandler(BackgroundTaskSystem backgroundTaskSystem)
+    /// <param name="configService">The configuration service for runtime parameter access</param>
+    /// <exception cref="ArgumentNullException">Thrown when any parameter is null</exception>
+    public DelCommandHandler(BackgroundTaskSystem backgroundTaskSystem, IConfigurationService configService)
     {
         _backgroundTaskSystem = backgroundTaskSystem ?? throw new ArgumentNullException(nameof(backgroundTaskSystem));
+        _configService = configService ?? throw new ArgumentNullException(nameof(configService));
     }
 
     /// <summary>
@@ -74,17 +68,21 @@ public class DelCommandHandler : BaseCommandHandler
             context.DataStore.Remove(key);
             context.ExpirationService.RemoveExpiration(key);
 
+            // Read threshold from config (hot-reload support!)
+            // This allows runtime adjustment via CONFIG SET lazyfree-lazy-server-del <value>
+            var threshold = _configService.Get<int>("lazyfree-lazy-server-del");
+
             // Choose deletion strategy based on object size threshold
-            if (IsLargeObject(value))
+            if (IsLargeObject(value, threshold))
             {
-                // Large objects (>= 64 elements): Use asynchronous deletion to avoid blocking
+                // Large objects: Use asynchronous deletion to avoid blocking
                 // This implements Redis UNLINK-like behavior for better performance
                 // Submits to LazyFree category for isolation from other background operations
                 _backgroundTaskSystem.Submit(BackgroundTaskCategory.LazyFree, () => DestroyObject(value));
             }
             else
             {
-                // Small objects (< 64 elements): Delete immediately on the main thread
+                // Small objects: Delete immediately on the main thread
                 // Async overhead would be greater than deletion cost
                 DestroyObject(value);
             }
@@ -106,18 +104,19 @@ public class DelCommandHandler : BaseCommandHandler
     /// Uses a threshold-based approach to balance performance vs overhead.
     ///
     /// Performance Analysis:
-    /// - Small objects (< 64 elements): Sync deletion is faster (overhead > benefit)
-    /// - Large objects (>= 64 elements): Async deletion prevents main thread blocking
+    /// - Small objects (< threshold): Sync deletion is faster (overhead > benefit)
+    /// - Large objects (>= threshold): Async deletion prevents main thread blocking
     /// </summary>
     /// <param name="val">The object to evaluate</param>
+    /// <param name="threshold">The threshold for determining large objects</param>
     /// <returns>True if the object should be deleted asynchronously, false for immediate deletion</returns>
-    private static bool IsLargeObject(object val)
+    private static bool IsLargeObject(object val, int threshold)
     {
         if (val is Storage.DataStructures.SortedSet sortedSet)
         {
             // Only consider it "large" if it exceeds the threshold
             // This prevents unnecessary async overhead for small sorted sets
-            return sortedSet.Count >= LazyFreeThreshold;
+            return sortedSet.Count >= threshold;
         }
 
         // Simple objects like strings are always considered lightweight

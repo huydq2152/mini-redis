@@ -1,4 +1,5 @@
 using MyRedis.Abstractions.Commands;
+using MyRedis.Abstractions.Configuration;
 using MyRedis.Abstractions.Network;
 using MyRedis.Abstractions.Storage;
 using MyRedis.Core.Network;
@@ -71,20 +72,6 @@ namespace MyRedis.Infrastructure.Commands;
 /// </summary>
 public class CommandProcessor
 {
-    /// <summary>
-    /// Maximum commands to process per connection per event loop iteration.
-    ///
-    /// Fairness Strategy:
-    /// This limit prevents a single connection from monopolizing the server.
-    ///
-    /// Why 16?
-    /// - Redis uses similar limits (processInputBuffer processes in chunks)
-    /// - Small enough to ensure fairness (low latency for other clients)
-    /// - Large enough to amortize event loop overhead (efficient pipelining)
-    /// - Balances low throughput vs latency (avoid starvation)
-    /// </summary>
-    private const int MaxCommandsPerLoop = 16;
-    
     // Registry that maps command names (GET, SET, etc.) to handler instances
     private readonly ICommandRegistry _commandRegistry;
 
@@ -97,6 +84,9 @@ public class CommandProcessor
     // Service that formats responses in Redis protocol
     private readonly IResponseWriter _responseWriter;
 
+    // Configuration service for accessing runtime parameters
+    private readonly IConfigurationService _configService;
+
     /// <summary>
     /// Creates a command processor with all required dependencies.
     /// </summary>
@@ -104,12 +94,14 @@ public class CommandProcessor
         ICommandRegistry commandRegistry,
         IDataStore dataStore,
         IExpirationService expirationService,
-        IResponseWriter responseWriter)
+        IResponseWriter responseWriter,
+        IConfigurationService configService)
     {
         _commandRegistry = commandRegistry ?? throw new ArgumentNullException(nameof(commandRegistry));
         _dataStore = dataStore ?? throw new ArgumentNullException(nameof(dataStore));
         _expirationService = expirationService ?? throw new ArgumentNullException(nameof(expirationService));
         _responseWriter = responseWriter ?? throw new ArgumentNullException(nameof(responseWriter));
+        _configService = configService ?? throw new ArgumentNullException(nameof(configService));
     }
 
     /// <summary>
@@ -143,12 +135,16 @@ public class CommandProcessor
         // Track how many commands we process (for metrics and logging)
         var commandsProcessed = 0;
 
+        // Read max commands per loop from config (hot-reload support!)
+        // This allows runtime adjustment via CONFIG SET commands-per-loop <value>
+        var maxCommandsPerLoop = _configService.Get<int>("commands-per-loop");
+
         // Loop to handle pipelining: client may send multiple commands at once
-        // Process up to MAX_COMMANDS_PER_LOOP, then yield for fairness
+        // Process up to maxCommandsPerLoop, then yield for fairness
         while (true)
         {
             // FAIRNESS CHECK: Have we processed quota for this iteration?
-            if (commandsProcessed >= MaxCommandsPerLoop)
+            if (commandsProcessed >= maxCommandsPerLoop)
             {
                 // Processed fair share (16 commands)
                 // Check if there's likely more data to process
