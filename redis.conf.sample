@@ -1,0 +1,172 @@
+# MyRedis Configuration File
+#
+# This is a sample configuration file for MyRedis.
+# To use this file:
+# 1. Copy this file to "redis.conf" in the MyRedis directory
+# 2. Edit the parameters you want to change
+# 3. Start MyRedis - it will automatically load redis.conf
+#
+# Notes:
+# - Lines starting with # are comments
+# - Format: parameter-name value
+# - You can use CONFIG GET/SET to view/change parameters at runtime
+# - Use CONFIG REWRITE to save runtime changes back to this file
+#
+# For more information, see CLAUDE.md in the repository
+
+################################## NETWORK #####################################
+
+# TCP port to listen on
+# Default: 6379 (standard Redis port)
+# Range: 1-65535
+# Hot-reloadable: No (requires restart)
+port 6379
+
+# Idle connection timeout in seconds
+# Connections idle longer than this value will be closed
+# Set to 0 to disable timeout (connections never close due to idleness)
+# Default: 300 (5 minutes)
+# Range: 0-86400 (0 to 24 hours)
+# Hot-reloadable: Yes
+timeout 300
+
+# TCP listen backlog size
+# Maximum number of pending connections before OS starts rejecting new ones
+# This is an OS-level limit, not the maximum number of clients
+# Default: 128
+# Range: 1-65535
+# Hot-reloadable: No (requires restart)
+tcp-backlog 128
+
+################################## MEMORY ######################################
+
+# Maximum buffer size per connection in bytes
+# Prevents DoS attacks from clients sending huge commands
+# Connection buffers grow dynamically (start at 4KB, double when full)
+# This is a safety limit, not a performance bottleneck
+# Default: 536870912 (512MB)
+# Range: 1MB - 1GB
+# Hot-reloadable: No (buffers allocated at connection time)
+# Units supported: 1024 = 1KB, 1048576 = 1MB, 1073741824 = 1GB
+maxbuffersize 536870912
+
+# Lazy free threshold for async deletion (number of elements)
+# Objects with >= this many elements are deleted asynchronously in background
+# Objects with < this many elements are deleted synchronously (faster for small objects)
+# Default: 64 (matches Redis lazyfree-lazy-server-del)
+# Range: 1-10000
+# Hot-reloadable: Yes
+#
+# Performance notes:
+# - Small objects (1-63 elements): ~100ns sync deletion (optimal)
+# - Large objects (≥64 elements): Async deletion prevents blocking main thread
+lazyfree-lazy-server-del 64
+
+################################## PERFORMANCE #################################
+
+# Maximum commands processed per connection per event loop iteration
+# Limits pipelined commands to ensure fairness across all clients
+# Prevents one "greedy" client from monopolizing the server
+# After processing this many commands, server yields to other connections
+# Default: 16
+# Range: 1-1000
+# Hot-reloadable: Yes
+#
+# Tuning notes:
+# - Lower values: Better fairness, lower latency for other clients
+# - Higher values: Better throughput for pipelined commands
+commands-per-loop 16
+
+# Maximum arguments per command (DoS protection)
+# Commands with more arguments than this are rejected with protocol error
+# Prevents memory exhaustion from malicious clients
+# Default: 1024
+# Range: 10-10000
+# Hot-reloadable: Yes
+#
+# Notes:
+# - Most commands have 1-10 arguments
+# - ZADD with many members may need higher limit
+# - Example attack: ZADD key + 1 million score/member pairs
+max-protocol-args 1024
+
+################################## BACKGROUND ##################################
+
+# Background task frequency in Hz (tasks per second)
+# Controls how often background tasks run (expiration, idle cleanup, etc.)
+# Interval = 1000ms / hz
+# Default: 10 (runs every 100ms)
+# Range: 1-500
+# Hot-reloadable: Yes
+#
+# Tuning notes:
+# - Higher Hz: More responsive (faster key expiration) but higher CPU usage
+# - Lower Hz: Lower CPU usage but slower expiration detection
+# - 10 Hz (100ms) is imperceptible to users but frequent enough for cleanup
+hz 10
+
+# Maximum keys to expire per background cycle
+# Limits expiration work to prevent blocking the event loop
+# If many keys expire at once, they're processed over multiple cycles
+# Default: 100
+# Range: 1-10000
+# Hot-reloadable: Yes
+#
+# Performance notes:
+# - Typical execution: 10-50 microseconds (no expired keys)
+# - Heavy load: 100-200 microseconds (100 keys deleted)
+# - If 1000 keys expire, processed over 10 cycles (~1 second total)
+expire-keys-per-cycle 100
+
+# Idle connection check interval in milliseconds
+# How often to scan for idle connections that exceed timeout
+# Default: 1000 (1 second)
+# Range: 100-60000 (100ms to 60s)
+# Hot-reloadable: Yes
+#
+# Tuning notes:
+# - Lower values: Faster detection of abandoned connections, more CPU overhead
+# - Higher values: Slower detection, less CPU overhead
+# - 1 second delay is acceptable for most use cases
+idle-check-interval 1000
+
+################################## LOGGING #####################################
+
+# Logging level
+# Determines verbosity of server logs
+# Default: notice
+# Values: debug, verbose, notice, warning
+# Hot-reloadable: Yes
+#
+# Level descriptions:
+# - debug: Very verbose, logs every operation (development/debugging only)
+# - verbose: Detailed logs, more than needed for production
+# - notice: Important events only (recommended for production)
+# - warning: Only warnings and errors (minimal logging)
+#
+# Note: Full logging system not yet implemented, reserved for future use
+loglevel notice
+
+################################################################################
+# End of sample configuration
+################################################################################
+#
+# Hot-reloadable parameters:
+# These can be changed at runtime via CONFIG SET and take effect immediately:
+# - timeout, lazyfree-lazy-server-del, commands-per-loop, max-protocol-args
+# - hz, expire-keys-per-cycle, idle-check-interval, loglevel
+#
+# Non-hot-reloadable parameters:
+# These require server restart to take effect:
+# - port, tcp-backlog, maxbuffersize
+#
+# To change parameters at runtime:
+#   CONFIG SET parameter-name new-value
+#
+# To save runtime changes back to this file:
+#   CONFIG REWRITE
+#
+# To view current configuration:
+#   CONFIG GET *                    # Get all parameters
+#   CONFIG GET parameter-name       # Get specific parameter
+#   CONFIG GET max*                 # Get all parameters matching pattern
