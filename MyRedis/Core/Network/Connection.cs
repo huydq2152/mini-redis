@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Net.Sockets;
+using MyRedis.Abstractions.Configuration;
 using MyRedis.Common.Helpers;
 
 namespace MyRedis.Core.Network;
@@ -34,19 +35,10 @@ namespace MyRedis.Core.Network;
 public class Connection
 {
     /// <summary>
-    /// Maximum allowed size for the read buffer (512MB).
-    ///
-    /// This matches Redis's proto-max-bulk-len configuration:
-    /// - Default: 512MB (536,870,912 bytes)
-    /// - Prevents DoS attacks via memory exhaustion
-    /// - Allows legitimate large values (e.g., storing images, JSON blobs)
-    ///
-    /// Why 512MB?
-    /// - Redis default, battle-tested in production
-    /// - Large enough for legitimate use cases
-    /// - Small enough to prevent single connection from consuming all memory
+    /// The actual maximum buffer size for this connection, read from configuration.
+    /// Cached at connection creation time for performance (avoid config lookups on every grow).
     /// </summary>
-    public const int MaxBufferSize = 512 * 1024 * 1024; // 512MB
+    private readonly long _maxBufferSize;
     
     /// <summary>
     /// The underlying TCP socket for this connection.
@@ -152,10 +144,24 @@ public class Connection
     /// - Configured with appropriate socket options
     ///
     /// All buffers and state are initialized with default values.
+    ///
+    /// Configuration:
+    /// - Reads maxbuffersize from ConfigurationService at creation time
+    /// - Value is cached for performance (avoid lookups on every buffer grow)
+    /// - Configuration service is REQUIRED (dependency injection principle)
     /// </summary>
-    public Connection(Socket socket)
+    /// <param name="socket">The connected client socket</param>
+    /// <param name="configService">Configuration service for reading runtime parameters (required)</param>
+    public Connection(Socket socket, IConfigurationService configService)
     {
-        Socket = socket;
+        Socket = socket ?? throw new ArgumentNullException(nameof(socket));
+        ArgumentNullException.ThrowIfNull(configService);
+
+        // Read the configured maximum buffer size
+        // Cache it to avoid repeated config lookups during GrowBuffer() calls
+        // Performance: Get<long>() is cheap, but we may call GrowBuffer() many times
+        // for clients sending incremental large commands
+        _maxBufferSize = configService.Get<long>("maxbuffersize");
     }
     
     /// <summary>
@@ -277,10 +283,12 @@ public class Connection
         // Use long to prevent overflow when currentSize is large
         var newSizeLong = (long)currentSize * 2;
 
-        // Check if growth would exceed maximum allowed size
-        if (newSizeLong > MaxBufferSize)
+        // Check if growth would exceed configured maximum size
+        // Uses _maxBufferSize (read from configuration) instead of hardcoded constant
+        // This allows runtime configuration via CONFIG SET (requires restart due to isHotReloadable: false)
+        if (newSizeLong > _maxBufferSize)
         {
-            Console.WriteLine($"[Buffer] Cannot grow beyond {currentSize} bytes (max: {MaxBufferSize})");
+            Console.WriteLine($"[Buffer] Cannot grow beyond {currentSize} bytes (max: {_maxBufferSize})");
             return false;
         }
 

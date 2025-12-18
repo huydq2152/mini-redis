@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
+using MyRedis.Abstractions.Configuration;
 using MyRedis.Abstractions.Network;
 using MyRedis.Core.Network;
 
@@ -143,6 +144,10 @@ public class NetworkServer
     // Tracks connection activity for idle detection
     private readonly IConnectionManager _connectionManager;
 
+    // Configuration service for reading runtime parameters
+    // Passed to Connection instances for maxbuffersize and other per-connection settings
+    private readonly IConfigurationService _configurationService;
+
     // HashSet of sockets with pending writes (partial sends)
     // Performance: O(1) add/remove, O(K) iteration where K = pending writes count
     // Why HashSet instead of List.Contains or flag iteration:
@@ -185,11 +190,17 @@ public class NetworkServer
     /// - Clients can connect via 127.0.0.1, machine IP, etc.
     /// </summary>
     /// <param name="connectionManager">Service to track connection activity</param>
-    /// <param name="port">TCP port to listen on (default: 6379, same as Redis)</param>
-    public NetworkServer(IConnectionManager connectionManager, int port = 6379)
+    /// <param name="configurationService">Configuration service for runtime parameters</param>
+    public NetworkServer(IConnectionManager connectionManager, IConfigurationService configurationService)
     {
-        // Validate dependency
+        // Validate dependencies
         _connectionManager = connectionManager ?? throw new ArgumentNullException(nameof(connectionManager));
+        _configurationService = configurationService ?? throw new ArgumentNullException(nameof(configurationService));
+
+        // Read configuration parameters at startup
+        // These are NOT hot-reloadable (require server restart)
+        var port = _configurationService.Get<int>("port");
+        var tcpBacklog = _configurationService.Get<int>("tcp-backlog");
 
         // Create TCP socket for IPv4
         _listener = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
@@ -197,11 +208,12 @@ public class NetworkServer
         // Allow fast restart after shutdown (avoid "Address already in use")
         _listener.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
 
-        // Bind to all network interfaces on the specified port
+        // Bind to all network interfaces on the configured port
         _listener.Bind(new IPEndPoint(IPAddress.Any, port));
 
-        // Start listening with backlog of 128 pending connections
-        _listener.Listen(128);
+        // Start listening with configured backlog
+        // Backlog: Maximum number of pending connections before accept()
+        _listener.Listen(tcpBacklog);
 
         // Set to non-blocking mode (critical for event loop)
         _listener.Blocking = false;
@@ -209,7 +221,7 @@ public class NetworkServer
         // Add listener to the socket list (Select will monitor it)
         _allSockets.Add(_listener);
 
-        Console.WriteLine($"[Server] Listening on {IPAddress.Any}:{port}");
+        Console.WriteLine($"[Server] Listening on {IPAddress.Any}:{port} (backlog: {tcpBacklog})");
     }
 
     /// <summary>
@@ -386,7 +398,8 @@ public class NetworkServer
             _allSockets.Add(client);
 
             // Create Connection object (buffers, state, etc.)
-            var connection = new Connection(client);
+            // Pass configuration service so connection can read maxbuffersize and other parameters
+            var connection = new Connection(client, _configurationService);
 
             // Map socket to connection for fast lookup
             _connections[client] = connection;
@@ -482,7 +495,7 @@ public class NetworkServer
                 {
                     // Growth failed: Exceeded MAX_BUFFER_SIZE (512MB)
                     // This is a protocol error - command is too large
-                    Console.WriteLine($"[Protocol Error] Command exceeds maximum size ({Connection.MaxBufferSize} bytes)");
+                    Console.WriteLine($"[Protocol Error] Command exceeds maximum size of maxbuffersize configuration");
                     HandleDisconnect(clientSocket);
                     return 0;
                 }

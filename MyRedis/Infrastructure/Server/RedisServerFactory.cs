@@ -63,8 +63,10 @@ public static class RedisServerFactory
     /// ready to start the event loop via RunAsync().
     ///
     /// Configuration:
-    /// - Port: TCP port to listen on (default: 6379, same as Redis)
-    /// - All other settings are hardcoded (simple server, no config file)
+    /// - All settings read from ConfigurationService
+    /// - Default values registered in ConfigurationRegistry
+    /// - Can be overridden via redis.conf file
+    /// - Some parameters are hot-reloadable, others require restart
     ///
     /// Why Static Method?
     /// - No state needed between calls
@@ -76,10 +78,9 @@ public static class RedisServerFactory
     /// - Each call creates independent server instance
     /// - Servers don't share state
     /// </summary>
-    /// <param name="port">TCP port to listen on (default: 6379)</param>
     /// <returns>Tuple of (orchestrator, backgroundTaskSystem) - orchestrator ready to run, system for shutdown</returns>
     public static (RedisServerOrchestrator orchestrator, BackgroundTaskSystem backgroundTaskSystem)
-        CreateServer(int port = 6379)
+        CreateServer()
     {
         // Create the dependency injection container
         // This manages all service instances and resolves dependencies
@@ -98,7 +99,7 @@ public static class RedisServerFactory
         // STEP 3: Register infrastructure components
         // High-level components (network, processor, orchestrator)
         // Must be registered last because they depend on core services
-        RegisterInfrastructureComponents(container, port);
+        RegisterInfrastructureComponents(container);
 
         // STEP 4: Resolve and return the orchestrator and background task system
         // Container automatically resolves all dependencies recursively
@@ -143,7 +144,7 @@ public static class RedisServerFactory
         // Register managers first (other services may depend on them)
         // These are concrete classes that predate the service abstraction layer
         container.RegisterSingleton(new ExpirationManager());
-        container.RegisterSingleton(new IdleManager());
+        container.RegisterSingleton(c => new IdleManager(c.Resolve<IConfigurationService>()));
         container.RegisterSingleton(new BackgroundTaskSystem());
 
         // Register service abstractions (interfaces)
@@ -217,7 +218,11 @@ public static class RedisServerFactory
 
     /// <summary>
     /// Registers infrastructure components that coordinate the server.
-    /// 
+    ///
+    /// All Configuration Parameters:
+    /// Infrastructure components read their configuration from ConfigurationService.
+    /// This includes port, backlog, timeouts, limits, etc.
+    ///
     /// Factory Functions:
     /// Each component uses a factory (c => new Component(...))
     /// The factory:
@@ -231,12 +236,12 @@ public static class RedisServerFactory
     /// - Factories allow lazy resolution (when dependencies are ready)
     /// - Container automatically resolves the dependency graph
     /// </summary>
-    private static void RegisterInfrastructureComponents(ServiceContainer container, int port)
+    private static void RegisterInfrastructureComponents(ServiceContainer container)
     {
         container.RegisterSingleton<NetworkServer>(c =>
             new NetworkServer(
                 c.Resolve<IConnectionManager>(),
-                port));
+                c.Resolve<IConfigurationService>()));
         
         container.RegisterSingleton<CommandProcessor>(c =>
             new CommandProcessor(
@@ -257,7 +262,8 @@ public static class RedisServerFactory
 
             manager.Register(new IdleConnectionCleanupTask(
                 c.Resolve<IConnectionManager>(),
-                c.Resolve<NetworkServer>()));
+                c.Resolve<NetworkServer>(),
+                c.Resolve<IConfigurationService>()));
 
             // Future tasks can be added here without modifying BackgroundTaskManager: metric, snapshot, heartbeat, etc.
 

@@ -127,9 +127,10 @@ public static class ProtocolParser
     /// <param name="dataLen">Number of valid bytes in the buffer</param>
     /// <param name="command">Output: Parsed command arguments (null if incomplete)</param>
     /// <param name="bytesConsumed">Output: Bytes used from buffer (0 if incomplete)</param>
+    /// <param name="maxArgs">Maximum number of arguments allowed (DoS protection)</param>
     /// <returns>True if a complete command was parsed, false if more data needed</returns>
     /// <exception cref="Exception">Thrown if argument count exceeds safety limit</exception>
-    public static bool TryParse(byte[] buffer, int dataLen, out List<string>? command, out int bytesConsumed)
+    public static bool TryParse(byte[] buffer, int dataLen, out List<string>? command, out int bytesConsumed, int maxArgs = 1024)
     {
         // Initialize output parameters for failure case
         command = null;
@@ -150,11 +151,12 @@ public static class ProtocolParser
 
         // Security: Limit argument count to prevent memory exhaustion
         // Redis commands typically have 1-10 arguments
-        // 1024 is generous but prevents DoS attacks like:
+        // Configured limit (default: 1024) prevents DoS attacks like:
         // - Sending huge argument count causes huge allocation
         // - Crashing server with OutOfMemoryException
-        if (nStr > 1024)
-            throw new Exception("Protocol Error: Too many arguments");
+        // Configurable via "max-protocol-args" parameter
+        if (nStr > maxArgs)
+            throw new Exception($"Protocol Error: Too many arguments ({nStr} > {maxArgs})");
 
         // Pre-allocate list with exact capacity (avoids resizing)
         var result = new List<string>((int)nStr);

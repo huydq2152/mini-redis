@@ -33,6 +33,8 @@ public class ExpirationTask : BackgroundTaskBase
     private readonly IExpirationService _expirationService;
     private readonly IConfigurationService _configService;
 
+    private long _nextRunTime;
+
     /// <summary>
     /// Creates a new expiration task.
     /// </summary>
@@ -48,20 +50,43 @@ public class ExpirationTask : BackgroundTaskBase
         _dataStore = dataStore ?? throw new ArgumentNullException(nameof(dataStore));
         _expirationService = expirationService ?? throw new ArgumentNullException(nameof(expirationService));
         _configService = configService ?? throw new ArgumentNullException(nameof(configService));
+        _nextRunTime = Common.Helpers.TimeHelper.GetNow();
     }
 
     /// <summary>
     /// Gets the delay until next expiration processing.
+    /// Uses configured 'hz' parameter for interval calculation (hot-reload support).
     /// </summary>
     public override int GetNextRunDelay()
     {
-        // Ask expiration service when the next key expires
+        // Ask expiration service when the next key expires (data-driven)
         var expirationDelay = _expirationService.GetNextTimeout();
 
-        // Use the shorter delay (data-driven vs interval-based)
-        var intervalDelay = base.GetNextRunDelay();
+        // Calculate interval-based delay from configuration
+        // Read hz config (default: 10 Hz = 100ms interval)
+        // Hot-reload support: Changes to hz take effect on next iteration
+        var now = Common.Helpers.TimeHelper.GetNow();
+        var intervalDelay = _nextRunTime - now;
+        if (intervalDelay < 0) intervalDelay = 0;
 
-        return Math.Min(expirationDelay, intervalDelay);
+        // Use the shorter delay (data-driven vs interval-based)
+        return Math.Min(expirationDelay, (int)intervalDelay);
+    }
+
+    /// <summary>
+    /// Executes the expiration task with configuration-driven scheduling.
+    /// </summary>
+    public override void Execute()
+    {
+        // Execute the core work
+        ExecuteCore();
+
+        // Schedule next run based on hz configuration
+        // hz = frequency in Hz (e.g., 10 Hz = run 10 times per second)
+        // intervalMs = 1000 / hz (e.g., 10 Hz = 100ms interval)
+        var hz = _configService.Get<int>("hz");
+        var intervalMs = 1000 / hz;
+        _nextRunTime = Common.Helpers.TimeHelper.GetNow() + intervalMs;
     }
 
     /// <summary>

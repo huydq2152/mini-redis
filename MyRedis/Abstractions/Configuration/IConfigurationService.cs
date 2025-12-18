@@ -3,24 +3,9 @@ namespace MyRedis.Abstractions.Configuration;
 /// <summary>
 /// Main configuration service interface - thread-safe, observable, production-ready.
 ///
-/// Design Philosophy:
-/// - Simple API for 99% use cases (Get/Set)
-/// - Type-safe access with compile-time guarantees
-/// - Runtime validation with friendly errors
-/// - Observable for monitoring and debugging
-///
 /// Thread Safety:
 /// - All methods are thread-safe
 /// - Single-threaded event loop means no contention
-///
-/// Example Usage:
-/// // Simple access
-/// var threshold = configService.Get&lt;int&gt;("lazyfree-lazy-server-del");
-///
-/// // Set with validation
-/// var result = await configService.SetAsync("maxclients", "10000");
-/// if (!result.Success)
-///     Console.WriteLine($"Error: {result.ErrorMessage}");
 /// </summary>
 public interface IConfigurationService
 {

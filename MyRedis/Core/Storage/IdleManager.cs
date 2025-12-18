@@ -1,3 +1,4 @@
+using MyRedis.Abstractions.Configuration;
 using MyRedis.Core.Network;
 
 namespace MyRedis.Core.Storage;
@@ -39,9 +40,17 @@ public class IdleManager
     // Tail = newest (most recently active)
     private readonly LinkedList<Connection> _list = new();
 
-    // Idle timeout in milliseconds (5 minutes)
-    // Connections inactive for longer than this will be closed
-    private const int IdleTimeoutMs = 300 * 1000;
+    // Configuration service for reading idle timeout parameter (hot-reload support)
+    private readonly IConfigurationService _configService;
+
+    /// <summary>
+    /// Creates a new idle connection manager.
+    /// </summary>
+    /// <param name="configService">Configuration service for reading timeout parameter</param>
+    public IdleManager(IConfigurationService configService)
+    {
+        _configService = configService ?? throw new ArgumentNullException(nameof(configService));
+    }
 
     /// <summary>
     /// Adds a new connection to the idle tracking list.
@@ -144,6 +153,11 @@ public class IdleManager
         var result = new List<Connection>();
         var now = Environment.TickCount64;
 
+        // Read timeout from config (hot-reload support!)
+        // Timeout is in seconds, convert to milliseconds
+        var timeoutSeconds = _configService.Get<int>("timeout");
+        var timeoutMs = timeoutSeconds * 1000;
+
         // Start from the HEAD (oldest connections first)
         var node = _list.First;
         while (node != null)
@@ -153,7 +167,7 @@ public class IdleManager
             // Calculate how long this connection has been idle
             var idleTime = now - conn.LastActive;
 
-            if (idleTime > IdleTimeoutMs)
+            if (idleTime > timeoutMs)
             {
                 // Connection has been idle too long - mark for closure
                 result.Add(conn);
@@ -212,8 +226,13 @@ public class IdleManager
 
         var now = Environment.TickCount64;
 
+        // Read timeout from config (hot-reload support!)
+        // Timeout is in seconds, convert to milliseconds
+        var timeoutSeconds = _configService.Get<int>("timeout");
+        var timeoutMs = timeoutSeconds * 1000;
+
         // Calculate when the oldest connection will become idle
-        var deadline = _list.First.Value.LastActive + IdleTimeoutMs;
+        var deadline = _list.First.Value.LastActive + timeoutMs;
 
         // If already past deadline, wake up immediately
         if (deadline <= now)

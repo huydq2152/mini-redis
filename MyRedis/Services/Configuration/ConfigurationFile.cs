@@ -46,7 +46,7 @@ public static class ConfigurationFile
     }
 
     /// <summary>
-    /// Reads configuration from file and applies to configuration service.
+    /// Reads configuration from file (redis.conf) and applies to configuration service.
     ///
     /// This method is intentionally SYNCHRONOUS because it's called during
     /// server startup BEFORE the event loop starts. No clients are connected yet,
@@ -54,25 +54,23 @@ public static class ConfigurationFile
     ///
     /// For runtime config reloads (future feature), consider making this async.
     /// </summary>
-    public static void LoadFromFile(IConfigurationService configService, string? filePath = null)
+    public static void LoadFromFile(IConfigurationService configService)
     {
-        filePath ??= DefaultConfigFile;
-
-        if (!File.Exists(filePath))
+        if (!File.Exists(DefaultConfigFile))
         {
-            Console.WriteLine($"[Config] File not found: {filePath}, using defaults");
+            Console.WriteLine($"[Config] File not found: {DefaultConfigFile}, using defaults");
             return;
         }
 
-        Console.WriteLine($"[Config] Loading from: {filePath}");
+        Console.WriteLine($"[Config] Loading from: {DefaultConfigFile}");
 
-        int lineNumber = 0;
-        int loaded = 0;
-        int errors = 0;
+        var lineNumber = 0;
+        var loaded = 0;
+        var errors = 0;
 
         // File.ReadLines() is lazy enumeration (does not load entire file into memory)
         // This is acceptable for startup (no event loop yet)
-        foreach (var line in File.ReadLines(filePath))
+        foreach (var line in File.ReadLines(DefaultConfigFile))
         {
             lineNumber++;
 
@@ -98,10 +96,16 @@ public static class ConfigurationFile
             var name = parts[0];
             var value = parts[1];
 
-            // Apply configuration
+            // Apply configuration using startup method (bypasses IsMutable check)
+            // This matches Redis behavior where redis.conf can set all parameters
+            // regardless of runtime mutability restrictions
             try
             {
-                var result = configService.SetAsync(name, value).Result;
+                // Cast to concrete type to access SetForStartupAsync
+                // This is safe because we control the registration in RedisServerFactory
+                var result = (configService as ConfigurationService)?.SetForStartupAsync(name, value).Result
+                    ?? ConfigResult.Failure("Invalid configuration service type");
+
                 if (result.Success)
                 {
                     loaded++;
@@ -123,7 +127,7 @@ public static class ConfigurationFile
     }
 
     /// <summary>
-    /// Writes current configuration to file asynchronously, preserving structure and comments.
+    /// Writes current configuration to redis.conf asynchronously, preserving structure and comments.
     ///
     /// This method uses ASYNC I/O to avoid blocking the Redis event loop.
     ///
@@ -149,18 +153,16 @@ public static class ConfigurationFile
     /// - If file doesn't exist: Create new file with all parameters
     /// - Atomic write: Write to temp file, then replace original
     /// </summary>
-    public static async Task WriteToFileAsync(IConfigurationService configService, string? filePath = null)
+    public static async Task WriteToFileAsync(IConfigurationService configService)
     {
-        filePath ??= DefaultConfigFile;
-
-        Console.WriteLine($"[Config] Writing to: {filePath}");
+        Console.WriteLine($"[Config] Writing to: {DefaultConfigFile}");
 
         // Get all current parameters
         var currentConfig = configService.GetAll();
 
         // Read existing file if it exists
-        var existingLines = File.Exists(filePath)
-            ? (await File.ReadAllLinesAsync(filePath)).ToList()
+        var existingLines = File.Exists(DefaultConfigFile)
+            ? (await File.ReadAllLinesAsync(DefaultConfigFile)).ToList()
             : new List<string>();
 
         var updatedLines = new List<string>();
@@ -234,16 +236,16 @@ public static class ConfigurationFile
         }
 
         // Write to temp file first (atomic write)
-        var tempFile = filePath + ".tmp";
+        var tempFile = DefaultConfigFile + ".tmp";
         await File.WriteAllLinesAsync(tempFile, updatedLines);
 
         // Replace original file
-        if (File.Exists(filePath))
+        if (File.Exists(DefaultConfigFile))
         {
-            File.Delete(filePath);
+            File.Delete(DefaultConfigFile);
         }
-        File.Move(tempFile, filePath);
+        File.Move(tempFile, DefaultConfigFile);
 
-        Console.WriteLine($"[Config] Wrote {currentConfig.Count} parameters to {filePath}");
+        Console.WriteLine($"[Config] Wrote {currentConfig.Count} parameters to {DefaultConfigFile}");
     }
 }

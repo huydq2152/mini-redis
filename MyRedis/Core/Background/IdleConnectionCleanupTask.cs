@@ -1,3 +1,4 @@
+using MyRedis.Abstractions.Configuration;
 using MyRedis.Abstractions.Network;
 using MyRedis.Infrastructure.Network;
 
@@ -31,35 +32,58 @@ public class IdleConnectionCleanupTask : BackgroundTaskBase
 {
     private readonly IConnectionManager _connectionManager;
     private readonly NetworkServer _networkServer;
+    private readonly IConfigurationService _configService;
+    private long _nextRunTime;
 
     /// <summary>
     /// Creates a new idle connection cleanup task.
     /// </summary>
     /// <param name="connectionManager">Manager that tracks connection activity and identifies idle connections</param>
     /// <param name="networkServer">Server that can close connections</param>
-    /// <param name="intervalMs">Milliseconds between idle checks (default: 1000ms)</param>
+    /// <param name="configService">Configuration service for runtime parameters (hot-reload)</param>
     public IdleConnectionCleanupTask(
         IConnectionManager connectionManager,
         NetworkServer networkServer,
-        int intervalMs = 1000)
-        : base("IdleConnectionCleanup", intervalMs, maxWorkPerCycle: int.MaxValue, priority: 50)
+        IConfigurationService configService)
+        : base("IdleConnectionCleanup", intervalMs: 1000, maxWorkPerCycle: int.MaxValue, priority: 50)
     {
         _connectionManager = connectionManager ?? throw new ArgumentNullException(nameof(connectionManager));
         _networkServer = networkServer ?? throw new ArgumentNullException(nameof(networkServer));
+        _configService = configService ?? throw new ArgumentNullException(nameof(configService));
+        _nextRunTime = Common.Helpers.TimeHelper.GetNow();
     }
 
     /// <summary>
     /// Gets the delay until next idle connection check.
+    /// Uses configured 'idle-check-interval' parameter (hot-reload support).
     /// </summary>
     public override int GetNextRunDelay()
     {
-        // Ask connection manager when the next connection becomes idle
+        // Ask connection manager when the next connection becomes idle (data-driven)
         var idleDelay = _connectionManager.GetNextTimeout();
 
-        // Use the shorter delay (data-driven vs interval-based)
-        var intervalDelay = base.GetNextRunDelay();
+        // Calculate interval-based delay from configuration
+        // Read idle-check-interval config (default: 1000ms)
+        // Hot-reload support: Changes take effect on next iteration
+        var now = Common.Helpers.TimeHelper.GetNow();
+        var intervalDelay = _nextRunTime - now;
+        if (intervalDelay < 0) intervalDelay = 0;
 
-        return Math.Min(idleDelay, intervalDelay);
+        // Use the shorter delay (data-driven vs interval-based)
+        return Math.Min(idleDelay, (int)intervalDelay);
+    }
+
+    /// <summary>
+    /// Executes the idle connection cleanup task with configuration-driven scheduling.
+    /// </summary>
+    public override void Execute()
+    {
+        // Execute the core work
+        ExecuteCore();
+
+        // Schedule next run based on idle-check-interval configuration
+        var idleCheckInterval = _configService.Get<int>("idle-check-interval");
+        _nextRunTime = Common.Helpers.TimeHelper.GetNow() + idleCheckInterval;
     }
 
     /// <summary>

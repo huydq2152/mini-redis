@@ -16,9 +16,7 @@ public class ConfigParameter : IConfigParameter
     public IParameterValidator Validator { get; }
     public bool IsHotReloadable { get; }
     public bool IsMutable { get; }
-    public string Category { get; }
-    public string IntroducedInVersion { get; }
-    public string? DeprecationMessage { get; }
+    public ConfigCategory Category { get; }
 
     public ConfigParameter(
         string name,
@@ -28,9 +26,7 @@ public class ConfigParameter : IConfigParameter
         IParameterValidator validator,
         bool isHotReloadable = true,
         bool isMutable = true,
-        string category = "general",
-        string introducedInVersion = "1.0",
-        string? deprecationMessage = null)
+        ConfigCategory category = ConfigCategory.General)
     {
         Name = name ?? throw new ArgumentNullException(nameof(name));
         Description = description ?? throw new ArgumentNullException(nameof(description));
@@ -40,9 +36,7 @@ public class ConfigParameter : IConfigParameter
         Validator = validator ?? throw new ArgumentNullException(nameof(validator));
         IsHotReloadable = isHotReloadable;
         IsMutable = isMutable;
-        Category = category ?? throw new ArgumentNullException(nameof(category));
-        IntroducedInVersion = introducedInVersion ?? throw new ArgumentNullException(nameof(introducedInVersion));
-        DeprecationMessage = deprecationMessage;
+        Category = category;
 
         // Validate default value
         var validation = Validator.Validate(defaultValue);

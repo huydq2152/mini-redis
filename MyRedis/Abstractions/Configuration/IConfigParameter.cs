@@ -4,12 +4,6 @@ namespace MyRedis.Abstractions.Configuration;
 /// Metadata for a configuration parameter.
 /// Defines name, type, validation rules, default, hot-reload capability.
 ///
-/// Design Pattern: Metadata Object Pattern
-/// - Declarative parameter definition
-/// - Separates metadata from implementation
-/// - Enables runtime introspection
-/// - Makes adding parameters trivial
-///
 /// Immutability:
 /// - All properties are read-only (set at registration)
 /// - Thread-safe by design
@@ -68,19 +62,8 @@ public interface IConfigParameter
     bool IsMutable { get; }
 
     /// <summary>
-    /// Category for grouping (e.g., "memory", "network", "performance").
+    /// Category for grouping (e.g., Memory, Network, Performance).
     /// Useful for CONFIG GET by category.
     /// </summary>
-    string Category { get; }
-
-    /// <summary>
-    /// Version when parameter was introduced (for backward compatibility).
-    /// </summary>
-    string IntroducedInVersion { get; }
-
-    /// <summary>
-    /// Optional deprecation message.
-    /// If set, CONFIG SET shows warning.
-    /// </summary>
-    string? DeprecationMessage { get; }
+    ConfigCategory Category { get; }
 }

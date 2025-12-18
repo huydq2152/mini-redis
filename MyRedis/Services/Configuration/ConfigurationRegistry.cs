@@ -1,3 +1,4 @@
+using MyRedis.Abstractions.Configuration;
 using MyRedis.Services.Configuration.Validators;
 
 namespace MyRedis.Services.Configuration;
@@ -24,14 +25,14 @@ public static class ConfigurationRegistry
 
     private static void RegisterMemoryParameters(ConfigurationService service)
     {
-        // Maximum memory buffer size per connection
+        // Maximum memory buffer size per connection, enforced by Connection.GrowBuffer() when buffer needs to expand
         // Rationale for 512MB default:
         // - Connection buffers use dynamic growth (start at 4KB, doubles when full)
         // - 512MB limit prevents DoS attacks from malicious clients sending huge commands
         // - With 10,000 connections, max memory = 5TB (unrealistic worst case)
         // - Typical connection uses 4-16KB (normal command sizes)
         // - This is a safety limit, not a performance bottleneck
-        // Origin: MaxBufferSize constant
+        // - This matches Redis's proto-max-bulk-len configuration
         service.Register(new ConfigParameter(
             name: "maxbuffersize",
             description: "Maximum buffer size per connection in bytes",
@@ -40,8 +41,7 @@ public static class ConfigurationRegistry
             validator: new NumericValidator(min: 1024 * 1024, max: 1024L * 1024 * 1024, allowUnits: true),
             isHotReloadable: false, // Buffers allocated at connection time
             isMutable: true,
-            category: "memory",
-            introducedInVersion: "1.0"
+            category: ConfigCategory.Memory
         ));
 
         // Lazy free threshold for async deletion
@@ -53,7 +53,6 @@ public static class ConfigurationRegistry
         // Performance measurements:
         // - SortedSet with 10 elements: ~100ns sync deletion (optimal)
         // - SortedSet with 1000 elements: Async deletion, main thread remains responsive
-        // Origin: LazyFreeThreshold constant
         service.Register(new ConfigParameter(
             name: "lazyfree-lazy-server-del",
             description: "Threshold for async deletion (elements)",
@@ -62,19 +61,17 @@ public static class ConfigurationRegistry
             validator: new NumericValidator(min: 1, max: 10000),
             isHotReloadable: true, // Checked on each DEL operation
             isMutable: true,
-            category: "memory",
-            introducedInVersion: "1.0"
+            category: ConfigCategory.Memory
         ));
     }
 
     private static void RegisterNetworkParameters(ConfigurationService service)
     {
-        // TCP port - Standard Redis port
+        // TCP port - Standard Redis port, determines which TCP port the server listens on
         // Rationale for 6379 default:
         // - Standard Redis port for compatibility with existing clients
         // - Well-known port registered with IANA
         // - Allows drop-in replacement for Redis in development
-        // Origin: TCP listen port in NetworkServer
         service.Register(new ConfigParameter(
             name: "port",
             description: "TCP listen port",
@@ -83,17 +80,15 @@ public static class ConfigurationRegistry
             validator: new NumericValidator(min: 1, max: 65535),
             isHotReloadable: false, // Server socket bound at startup
             isMutable: false, // Read-only after startup
-            category: "network",
-            introducedInVersion: "1.0"
+            category: ConfigCategory.Network
         ));
 
-        // Idle connection timeout
+        // Idle connection timeout, connections idle longer than this are closed
         // Rationale for 300 seconds (5 minutes) default:
         // - Conservative value to avoid prematurely closing slow clients
         // - Matches Redis default timeout behavior
         // - Prevents resource exhaustion from abandoned connections
         // - 0 = never timeout (useful for long-running monitoring clients)
-        // Origin: IdleTimeoutMs constant
         service.Register(new ConfigParameter(
             name: "timeout",
             description: "Idle connection timeout in seconds (0 = never)",
@@ -102,17 +97,15 @@ public static class ConfigurationRegistry
             validator: new NumericValidator(min: 0, max: 86400), // 0 to 24 hours
             isHotReloadable: true, // Checked on each idle scan
             isMutable: true,
-            category: "network",
-            introducedInVersion: "1.0"
+            category: ConfigCategory.Network
         ));
 
-        // TCP listen backlog
+        // TCP listen backlog, passed to Socket.Listen() - max pending connections before OS rejects
         // Rationale for 128 default:
         // - Allows up to 128 simultaneous connection attempts before accept()
         // - OS-level limit, not application limit
         // - 128 is sufficient for typical workloads (bursts of new connections)
         // - Higher values don't necessarily improve performance
-        // Origin: Listen backlog parameter in NetworkServer
         service.Register(new ConfigParameter(
             name: "tcp-backlog",
             description: "TCP listen backlog size",
@@ -121,14 +114,13 @@ public static class ConfigurationRegistry
             validator: new NumericValidator(min: 1, max: 65535),
             isHotReloadable: false, // Socket option set at startup
             isMutable: true,
-            category: "network",
-            introducedInVersion: "1.0"
+            category: ConfigCategory.Network
         ));
     }
 
     private static void RegisterPerformanceParameters(ConfigurationService service)
     {
-        // Max commands per loop - Fairness and starvation prevention
+        // Max commands per loop - Fairness and starvation prevention, limits number of pipelined commands processed per iteration
         // Rationale for 16 commands default:
         // - Redis uses similar limits (processInputBuffer processes in chunks)
         // - Small enough to ensure fairness (low latency for other clients)
@@ -137,7 +129,6 @@ public static class ConfigurationRegistry
         // - Prevents "greedy" client with pipelined commands from monopolizing server
         // - After 16 commands, yield to other connections (even if more buffered data)
         // - Ensures round-robin fairness: all clients get timeslices
-        // Origin: MaxCommandsPerLoop constant
         service.Register(new ConfigParameter(
             name: "commands-per-loop",
             description: "Max commands processed per connection per iteration",
@@ -146,17 +137,15 @@ public static class ConfigurationRegistry
             validator: new NumericValidator(min: 1, max: 1000),
             isHotReloadable: true, // Checked on each iteration
             isMutable: true,
-            category: "performance",
-            introducedInVersion: "1.0"
+            category: ConfigCategory.Performance
         ));
 
-        // Max protocol arguments - DoS protection
+        // Max protocol arguments - DoS protection, commands exceeding this limit are rejected with protocol error
         // Rationale for 1024 arguments default:
         // - Prevents memory exhaustion attacks from malicious clients
         // - 1024 arguments is sufficient for legitimate commands (e.g., ZADD with many members)
         // - Typical commands have 1-10 arguments
         // - Protects against: command="ZADD key" + 1 million score/member pairs
-        // Origin: Max argument count check in ProtocolParser
         service.Register(new ConfigParameter(
             name: "max-protocol-args",
             description: "Max arguments per command (DoS protection)",
@@ -165,14 +154,14 @@ public static class ConfigurationRegistry
             validator: new NumericValidator(min: 10, max: 10000),
             isHotReloadable: true,
             isMutable: true,
-            category: "performance",
-            introducedInVersion: "1.0"
+            category: ConfigCategory.Performance
         ));
     }
 
     private static void RegisterBackgroundParameters(ConfigurationService service)
     {
         // Background task frequency - Expiration and maintenance cadence
+        // Controls interval between background task executions (1000/hz = interval in ms)
         // Rationale for 10 Hz (100ms interval) default:
         // - 10 Hz = 100ms interval between background task executions
         // - Matches typical Redis server Hz (default: 10, range: 1-500)
@@ -180,8 +169,6 @@ public static class ConfigurationRegistry
         // - Higher Hz = more responsive but higher CPU (more frequent wake-ups)
         // - Lower Hz = less CPU but less responsive (delayed expiration)
         // - 100ms is imperceptible to users but frequent enough for cleanup
-        // Origin: intervalMs parameter default in ExpirationTask
-        //         intervalMs parameter default in BackgroundTaskBase
         service.Register(new ConfigParameter(
             name: "hz",
             description: "Background task frequency (Hz)",
@@ -190,11 +177,10 @@ public static class ConfigurationRegistry
             validator: new NumericValidator(min: 1, max: 500),
             isHotReloadable: true, // Affects GetNextRunDelay()
             isMutable: true,
-            category: "background",
-            introducedInVersion: "1.0"
+            category: ConfigCategory.Background
         ));
 
-        // Max keys expired per cycle - Throttling for event loop protection
+        // Max keys expired per cycle - Throttling for event loop protection, throttles expiration work to prevent event loop blocking
         // Rationale for 100 keys default:
         // - Limits expiration work to prevent blocking the event loop
         // - Typical execution: 10-50 microseconds (no expired keys)
@@ -202,8 +188,6 @@ public static class ConfigurationRegistry
         // - If 1000 keys expire simultaneously, they're processed over 10 cycles (1 second)
         // - Similar to Redis ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP
         // - Prevents long-running expiration from delaying client commands
-        // Origin: maxKeysPerCycle parameter in ExpirationTask
-        //         maxWork parameter in ExpirationManager
         service.Register(new ConfigParameter(
             name: "expire-keys-per-cycle",
             description: "Max keys to expire per background cycle",
@@ -212,18 +196,16 @@ public static class ConfigurationRegistry
             validator: new NumericValidator(min: 1, max: 10000),
             isHotReloadable: true,
             isMutable: true,
-            category: "background",
-            introducedInVersion: "1.0"
+            category: ConfigCategory.Background
         ));
 
-        // Idle connection check interval
+        // Idle connection check interval, controls how frequently idle connections are checked for timeout
         // Rationale for 1000ms (1 second) default:
         // - Check for idle connections every 1 second
         // - Less frequent than expiration (expiration is more critical)
         // - 1 second delay in detecting idle connections is acceptable
         // - Lower values = more CPU for idle checks (diminishing returns)
         // - Higher values = slower detection of abandoned connections
-        // intervalMs parameter in IdleConnectionCleanupTask
         service.Register(new ConfigParameter(
             name: "idle-check-interval",
             description: "Idle connection check interval in milliseconds",
@@ -232,8 +214,7 @@ public static class ConfigurationRegistry
             validator: new NumericValidator(min: 100, max: 60000), // 100ms to 60s
             isHotReloadable: true,
             isMutable: true,
-            category: "background",
-            introducedInVersion: "1.0"
+            category: ConfigCategory.Background
         ));
     }
 
@@ -259,8 +240,7 @@ public static class ConfigurationRegistry
             validator: new EnumValidator("debug", "verbose", "notice", "warning"),
             isHotReloadable: true,
             isMutable: true,
-            category: "logging",
-            introducedInVersion: "1.0"
+            category: ConfigCategory.Logging
         ));
     }
 }

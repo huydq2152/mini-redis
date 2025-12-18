@@ -6,24 +6,14 @@ namespace MyRedis.Services.Configuration.Validators;
 /// Numeric validator with range constraints and unit support.
 /// Supports: 100, 1kb, 1mb, 1gb
 /// </summary>
-public class NumericValidator : IParameterValidator
+public class NumericValidator(long min = long.MinValue, long max = long.MaxValue, bool allowUnits = false)
+    : IParameterValidator
 {
-    private readonly long _min;
-    private readonly long _max;
-    private readonly bool _allowUnits;
-
-    public NumericValidator(long min = long.MinValue, long max = long.MaxValue, bool allowUnits = false)
-    {
-        _min = min;
-        _max = max;
-        _allowUnits = allowUnits;
-    }
-
     public ValidationResult Validate(string value)
     {
         long parsedValue;
 
-        if (_allowUnits)
+        if (allowUnits)
         {
             // Parse with units: 1kb, 1mb, 1gb
             if (!TryParseWithUnits(value, out parsedValue))
@@ -42,10 +32,10 @@ public class NumericValidator : IParameterValidator
         }
 
         // Range check
-        if (parsedValue < _min || parsedValue > _max)
+        if (parsedValue < min || parsedValue > max)
         {
             return ValidationResult.Failure(
-                $"Value {parsedValue} out of range. Must be between {_min} and {_max}.");
+                $"Value {parsedValue} out of range. Must be between {min} and {max}.");
         }
 
         return ValidationResult.Success();
@@ -53,8 +43,8 @@ public class NumericValidator : IParameterValidator
 
     public string GetValidationDescription()
     {
-        var desc = $"integer between {_min} and {_max}";
-        if (_allowUnits) desc += " (supports kb/mb/gb units)";
+        var desc = $"integer between {min} and {max}";
+        if (allowUnits) desc += " (supports kb/mb/gb units)";
         return desc;
     }
 

@@ -135,9 +135,10 @@ public class CommandProcessor
         // Track how many commands we process (for metrics and logging)
         var commandsProcessed = 0;
 
-        // Read max commands per loop from config (hot-reload support!)
-        // This allows runtime adjustment via CONFIG SET commands-per-loop <value>
+        // Read config values (hot-reload support!)
+        // These can be adjusted at runtime via CONFIG SET
         var maxCommandsPerLoop = _configService.Get<int>("commands-per-loop");
+        var maxProtocolArgs = _configService.Get<int>("max-protocol-args");
 
         // Loop to handle pipelining: client may send multiple commands at once
         // Process up to maxCommandsPerLoop, then yield for fairness
@@ -169,8 +170,9 @@ public class CommandProcessor
             // TryParse returns:
             // - true: Successfully parsed a command (cmd) and consumed bytes
             // - false: Not enough data for a complete command (need more from client)
+            // Configured maxProtocolArgs provides DoS protection against huge argument lists
             if (ProtocolParser.TryParse(connection.ReadBuffer, connection.BytesRead,
-                out var cmd, out var consumed))
+                out var cmd, out var consumed, maxProtocolArgs))
             {
                 // Successfully parsed one complete command
                 // cmd is a list of strings: ["GET", "key"] or ["SET", "key", "value"]

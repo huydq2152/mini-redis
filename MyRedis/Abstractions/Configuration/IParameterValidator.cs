@@ -8,11 +8,6 @@ namespace MyRedis.Abstractions.Configuration;
 /// - Validators are composable (ChainValidator)
 /// - Easy to add new validation logic
 /// - Testable in isolation
-///
-/// Error Messages:
-/// - Must be user-friendly
-/// - Should suggest valid values
-/// - Example: "Invalid value '999'. Must be between 1 and 100."
 /// </summary>
 public interface IParameterValidator
 {

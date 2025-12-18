@@ -22,7 +22,7 @@ public class ConfigCommandHandler(IConfigurationService configService) : BaseCom
 
     public override Task<bool> HandleAsync(ICommandContext context, IReadOnlyList<string> args)
     {
-        // CONFIG requires at least one argument (the subcommand)
+        // CONFIG requires at leaneeust one argument (the subcommand)
         if (args.Count == 0)
         {
             WriteError(context, "ERR wrong number of arguments for 'config' command");
@@ -42,6 +42,8 @@ public class ConfigCommandHandler(IConfigurationService configService) : BaseCom
 
     /// <summary>
     /// Handles CONFIG GET command.
+    ///
+    /// Get configurations in memory matching the given pattern.
     /// </summary>
     private Task<bool> HandleGetAsync(ICommandContext context, IReadOnlyList<string> args)
     {
@@ -80,6 +82,8 @@ public class ConfigCommandHandler(IConfigurationService configService) : BaseCom
 
     /// <summary>
     /// Handles CONFIG SET command.
+    ///
+    /// Set configuration parameter to a new value in memory.
     /// </summary>
     private async Task<bool> HandleSetAsync(ICommandContext context, IReadOnlyList<string> args)
     {
@@ -104,13 +108,15 @@ public class ConfigCommandHandler(IConfigurationService configService) : BaseCom
                 var param = _configService.GetParameterMetadata(name);
                 if (param != null && !param.IsHotReloadable)
                 {
-                    // Warning: requires restart
+                    // Warning: requires restart and reminder to persist
                     context.ResponseWriter.WriteString(context.Connection.Writer,
-                        "OK (restart required for this change to take effect)");
+                        "OK (restart required for this change to take effect. Use CONFIG REWRITE to persist this change)");
                 }
                 else
                 {
-                    context.ResponseWriter.WriteString(context.Connection.Writer, "OK");
+                    // Hot-reloadable parameter - still remind about persistence
+                    context.ResponseWriter.WriteString(context.Connection.Writer,
+                        "OK (use CONFIG REWRITE to persist this change)");
                 }
             }
             else
@@ -129,6 +135,13 @@ public class ConfigCommandHandler(IConfigurationService configService) : BaseCom
 
     /// <summary>
     /// Handles CONFIG REWRITE
+    ///
+    /// Commits current in-memory configuration to redis.conf file for persistence.
+    /// Rationale:
+    /// - Preserve changes made via CONFIG SET across restarts.
+    /// - This matches Redis's behavior (CONFIG SET is separate from CONFIG REWRITE)
+    /// - Allows batching multiple CONFIG SET operations before one CONFIG REWRITE
+    /// - Prevents excessive disk I/O on every configuration change
     ///
     /// Performance Note:
     /// - Uses async I/O (File.WriteAllLinesAsync) to avoid blocking the event loop
