@@ -133,6 +133,11 @@ public static class RedisServerFactory
         // Register configuration service FIRST (other services may depend on it)
         var configService = new ConfigurationService();
         ConfigurationRegistry.RegisterDefaultParameters(configService);
+
+        // Load configuration from redis.conf file if it exists
+        // This allows persisted settings from CONFIG REWRITE to be restored on startup
+        ConfigurationFile.LoadFromFile(configService);
+
         container.RegisterSingleton<IConfigurationService>(configService);
 
         // Register managers first (other services may depend on them)

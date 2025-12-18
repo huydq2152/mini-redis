@@ -9,35 +9,14 @@ namespace MyRedis.Commands;
 /// Subcommands:
 /// - CONFIG GET &lt;parameter&gt; - Get configuration value(s)
 /// - CONFIG SET &lt;parameter&gt; &lt;value&gt; - Set configuration value
-///
-/// Redis Protocol:
-/// - CONFIG GET returns array: [param1, value1, param2, value2, ...]
-/// - CONFIG SET returns "OK" on success, error otherwise
+/// - CONFIG REWRITE - Save current configuration to redis.conf file
+/// 
 /// - Supports glob patterns: CONFIG GET max*
-///
-/// Examples:
-/// &gt; CONFIG GET maxclients
-/// 1) "maxclients"
-/// 2) "10000"
-///
-/// &gt; CONFIG GET *
-/// 1) "port"
-/// 2) "6379"
-/// 3) "timeout"
-/// 4) "300"
-/// ...
-///
-/// &gt; CONFIG SET timeout 600
-/// OK
 /// </summary>
-public class ConfigCommandHandler : BaseCommandHandler
+public class ConfigCommandHandler(IConfigurationService configService) : BaseCommandHandler
 {
-    private readonly IConfigurationService _configService;
-
-    public ConfigCommandHandler(IConfigurationService configService)
-    {
-        _configService = configService ?? throw new ArgumentNullException(nameof(configService));
-    }
+    private readonly IConfigurationService _configService =
+        configService ?? throw new ArgumentNullException(nameof(configService));
 
     public override string CommandName => "CONFIG";
 
@@ -56,12 +35,13 @@ public class ConfigCommandHandler : BaseCommandHandler
         {
             "GET" => HandleGetAsync(context, args),
             "SET" => HandleSetAsync(context, args),
+            "REWRITE" => HandleRewriteAsync(context, args),
             _ => HandleUnknownSubcommand(context, subcommand)
         };
     }
 
     /// <summary>
-    /// Handles CONFIG GET &lt;parameter&gt;
+    /// Handles CONFIG GET command.
     /// </summary>
     private Task<bool> HandleGetAsync(ICommandContext context, IReadOnlyList<string> args)
     {
@@ -99,7 +79,7 @@ public class ConfigCommandHandler : BaseCommandHandler
     }
 
     /// <summary>
-    /// Handles CONFIG SET &lt;parameter&gt; &lt;value&gt;
+    /// Handles CONFIG SET command.
     /// </summary>
     private async Task<bool> HandleSetAsync(ICommandContext context, IReadOnlyList<string> args)
     {
@@ -148,11 +128,43 @@ public class ConfigCommandHandler : BaseCommandHandler
     }
 
     /// <summary>
+    /// Handles CONFIG REWRITE
+    ///
+    /// Performance Note:
+    /// - Uses async I/O (File.WriteAllLinesAsync) to avoid blocking the event loop
+    /// - During I/O wait, event loop can process other client requests
+    /// - Future: Consider offloading to BackgroundTaskSystem for zero blocking
+    /// </summary>
+    private async Task<bool> HandleRewriteAsync(ICommandContext context, IReadOnlyList<string> args)
+    {
+        // CONFIG REWRITE requires no additional arguments
+        if (args.Count != 1)
+        {
+            WriteError(context, "ERR wrong number of arguments for 'config rewrite' command");
+            return true;
+        }
+
+        try
+        {
+            // Write current configuration to redis.conf file asynchronously
+            await Services.Configuration.ConfigurationFile.WriteToFileAsync(_configService);
+            context.ResponseWriter.WriteString(context.Connection.Writer, "OK");
+            return true;
+        }
+        catch (Exception e)
+        {
+            WriteError(context, $"ERR {e.Message}");
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Handles unknown subcommands.
     /// </summary>
     private Task<bool> HandleUnknownSubcommand(ICommandContext context, string subcommand)
     {
-        WriteError(context, $"ERR Unknown CONFIG subcommand '{subcommand}'. Try CONFIG GET or CONFIG SET.");
+        WriteError(context,
+            $"ERR Unknown CONFIG subcommand '{subcommand}'. Try CONFIG GET, CONFIG SET, or CONFIG REWRITE.");
         return Task.FromResult(true);
     }
 }
